@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- See Relax specification: Ghidra/Framework/SoftwareModeling/data/languages/language_definitions.rxg -->
+
+<language_definitions>
+    <language processor="AARCH64"
+              endian="little"
+              size="64"
+              variant="dart"
+              version="0.1"
+              slafile="AARCH64.sla"
+              processorspec="AARCH64dart.pspec"
+              manualindexfile="../manuals/AARCH64.idx"
+              id="AARCH64:LE:64:dart">
+        <description>Generic ARM64 v8.5-A LE instructions, LE data, missing some 8.5 vector</description>
+        <compiler name="dart" spec="AARCH64dart.cspec" id="dart"/>
+        <external_name tool="DWARF.register.mapping.file" name="AARCH64.dwarf"/>
+    </language>
+</language_definitions>

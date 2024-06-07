@@ -1,0 +1,5 @@
+<patternconstraints>
+  <language id="AARCH64:LE:64:dart">
+    <patternfile>AARCH64_LE_patterns.xml</patternfile>
+  </language>
+</patternconstraints>

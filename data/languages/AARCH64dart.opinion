@@ -1,0 +1,5 @@
+<opinions>
+    <constraint loader="Dart ELF Loader Demo" compilerSpecID="dart">
+        <constraint primary="183" processor="AARCH64" endian="little" size="64" variant="dart" />
+    </constraint>
+</opinions>

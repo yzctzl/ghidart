@@ -1,0 +1,14 @@
+/ghidra_[0-9]*/
+/build/
+/bin/
+/dist/
+/.idea/
+/.vscode/
+/.settings/
+/.classpath
+/.project
+/.antProperties.xml
+/data/languages/*.sla
+
+# Local application fixtures and analysis exports; carry them when migrating.
+/samples/*/

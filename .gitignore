@@ -1,4 +1,5 @@
 /ghidra_[0-9]*/
+/.gradle/
 /build/
 /bin/
 /dist/
@@ -9,6 +10,9 @@
 /.project
 /.antProperties.xml
 /data/languages/*.sla
+/data/languages/AARCH64.dwarf
+/data/manuals/AARCH64.idx
+/gradle.properties
 
 # Local application fixtures and analysis exports; carry them when migrating.
 /samples/*/

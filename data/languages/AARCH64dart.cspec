@@ -28,7 +28,7 @@
     <range space="ram"/>
   </global>
 
-  <stackpointer register="VMSP" space="ram"/>
+  <stackpointer register="x15" space="ram"/>
   <returnaddress>
     <register name="x0" />
   </returnaddress>
@@ -87,18 +87,18 @@
         </pentry>
       </output>
       <unaffected>
-        <register name="VMSP"/>
+        <register name="x15"/>
         <register name="x19"/>
         <register name="x20"/>
-        <register name="GDT"/>
-        <register name="NULL"/>
+        <register name="x21"/>
+        <register name="x22"/>
         <register name="x23"/>
         <register name="x25"/>
-        <register name="THR"/>
-        <register name="PP"/>
-        <register name="HBS"/>
-        <register name="FP"/>
-        <register name="LR"/>
+        <register name="x26"/>
+        <register name="x27"/>
+        <register name="x28"/>
+        <register name="x29"/>
+        <register name="x30"/>
         <register name="sp"/>
         <!-- vectors -->
         <register name="d8"/>
@@ -120,10 +120,10 @@
         <register name="x12"/>
         <register name="x13"/>
         <register name="x14"/>
-        <register name="TMP"/>
-        <register name="TMP2"/>
+        <register name="x16"/>
+        <register name="x17"/>
         <register name="x18"/>
-        <register name="CODE"/>
+        <register name="x24"/>
         <!-- vectors -->
         <register name="d16"/>
         <register name="d17"/>

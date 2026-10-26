@@ -1,0 +1,109 @@
+/* ###
+ * IP: GHIDRA
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+// Build against an explicit Ghidra installation; no b4a checkout is required.
+def ghidraInstallDir = project.findProperty('GHIDRA_INSTALL_DIR') ?: System.getenv('GHIDRA_INSTALL_DIR')
+if (!ghidraInstallDir) {
+    throw new GradleException('Set GHIDRA_INSTALL_DIR to your Ghidra installation.')
+}
+apply from: new File(ghidraInstallDir, 'support/buildExtension.gradle')
+
+// Keep recovered templates in source control, but out of the runtime extension.
+sourceSets.main.java.exclude 'ghidart/ghidartPlugin.java',
+    'ghidart/ghidartExporter.java', 'ghidart/ghidartFileSystem.java'
+tasks.named('processResources') {
+    exclude 'META-INF/plugin.xml', 'META-INF/pluginIcon.svg', 'images/README.txt'
+}
+tasks.named('jar') {
+    // Old demos are not valid Dart discovery; their replacements are separate work.
+    exclude 'ghidart/ghidartAnalyzer*.class', 'ghidart/ghidartLoader*.class'
+}
+
+// ghidart changes Dart semantics, not the AArch64 instruction decoder. Keep the
+// decoder in lockstep with the Ghidra installation used to build the extension.
+def languageDir = file('data/languages')
+def manualDir = file('data/manuals')
+def officialAarch64Dir = new File(
+    ghidraInstallDir, 'Ghidra/Processors/AARCH64/data/languages')
+def officialAarch64ManualDir = new File(
+    ghidraInstallDir, 'Ghidra/Processors/AARCH64/data/manuals')
+def prepareAarch64Language = tasks.register('prepareAarch64Language') {
+    group = 'build'
+    description = 'Stage the official Ghidra AArch64 decoder for the Dart language.'
+
+    def sla = new File(officialAarch64Dir, 'AARCH64.sla')
+    def dwarf = new File(officialAarch64Dir, 'AARCH64.dwarf')
+    def manualIndex = new File(officialAarch64ManualDir, 'AARCH64.idx')
+    inputs.files(sla, dwarf, manualIndex)
+    outputs.files(
+        new File(languageDir, 'AARCH64.sla'),
+        new File(languageDir, 'AARCH64.dwarf'),
+        new File(manualDir, 'AARCH64.idx'))
+
+    doLast {
+        [sla, dwarf, manualIndex].each { input ->
+            if (!input.isFile()) {
+                throw new GradleException("Missing official AArch64 language file: ${input}")
+            }
+        }
+        copy {
+            from sla, dwarf
+            into languageDir
+        }
+        copy {
+            from manualIndex
+            into manualDir
+        }
+    }
+}
+
+def compileB4aIntegration = tasks.register('compileB4aIntegration', JavaCompile) {
+    group = 'verification'
+    description = 'Compile the deferred b4a importer and offline sample verifier.'
+    source 'ghidra_scripts/b4a/ImportB4a.java', 'tools/VerifyB4a.java'
+    classpath = sourceSets.main.compileClasspath
+    destinationDirectory = layout.buildDirectory.dir('b4a-integration-classes')
+    options.encoding = 'UTF-8'
+}
+
+def verifySources = tasks.register('verifySources') {
+    group = 'verification'
+    description = 'Fail the extension build if the Java source tree is missing.'
+    doLast {
+        if (sourceSets.main.allJava.isEmpty()) {
+            throw new GradleException('No Java sources in src/main/java; check source recovery before building.')
+        }
+    }
+}
+
+tasks.register('verifySamples', JavaExec) {
+    group = 'verification'
+    description = 'Verify local b4a documents and original binaries without starting Ghidra.'
+    dependsOn compileB4aIntegration
+    classpath = sourceSets.main.compileClasspath + files(compileB4aIntegration.flatMap { it.destinationDirectory })
+    mainClass = 'VerifyB4a'
+    maxHeapSize = '512m'
+    args file(project.findProperty('samplesDir') ?: 'samples').absolutePath
+}
+
+tasks.named('buildExtension') {
+    dependsOn verifySources, prepareAarch64Language
+    exclude 'samples/**', 'tools/**', '.git/**', '.gitignore', '.vscode/**',
+        'gradle.properties', 'ghidart-OLD/**'
+    // b4a import is retained as deferred integration work, not shipped as core functionality yet.
+    exclude 'ghidra_scripts/b4a/**'
+    // Exclude local distributions while preserving ghidra_scripts/.
+    exclude { it.relativePath.segments[0].matches('ghidra_[0-9].*') }
+}

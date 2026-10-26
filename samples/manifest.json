@@ -1,0 +1,165 @@
+{
+  "format": "ghidart-local-samples",
+  "version": 1,
+  "b4aRevision": "4db0e88",
+  "samples": [
+    {
+      "name": "android-arm64",
+      "binary": "android-arm64/libapp.so",
+      "metadata": "android-arm64/b4a.json",
+      "origin": "User-provided local application fixture; redistribution permission not established.",
+      "dart": "3.10.8 (stable) (Tue Jan 27 00:02:04 2026 -0800) on \"linux_simarm64\"",
+      "target": {
+        "arch": "arm64",
+        "thread": "x26",
+        "pool": "x27",
+        "stack": "x15",
+        "entrySlots": 0,
+        "os": "android",
+        "wordSize": 8,
+        "slotSize": 4,
+        "compressed": true,
+        "heapBaseOffset": 88,
+        "endian": "little",
+        "snapshotHash": "1ce86630892e2dca9a8543fdb8ed8e22",
+        "snapshotFlags": [
+          "product",
+          "no-code_comments",
+          "no-dwarf_stack_traces_mode",
+          "dedup_instructions",
+          "no-tsan",
+          "no-msan",
+          "no-shared_data",
+          "arm64",
+          "android",
+          "compressed-pointers"
+        ]
+      },
+      "image": {
+        "format": "elf",
+        "sha256": "2d7e2a2facc9cc068b575ca8d9737ec2170af9dc32c79db366e9cbf0742ef576",
+        "sliceOffset": "0x0",
+        "fileSize": 25887664
+      },
+      "codeUnits": 57527,
+      "analysisState": "available",
+      "files": [
+        {
+          "name": "libapp.so",
+          "size": 25887664,
+          "sha256": "2d7e2a2facc9cc068b575ca8d9737ec2170af9dc32c79db366e9cbf0742ef576"
+        },
+        {
+          "name": "b4a.json",
+          "size": 253907195,
+          "sha256": "fe7334de7bea9378a5b769ff4cdb1ed557307d187cb18e2aac3fb92087be018e"
+        }
+      ]
+    },
+    {
+      "name": "ios-arm64",
+      "binary": "ios-arm64/App",
+      "metadata": "ios-arm64/b4a.json",
+      "origin": "User-provided local application fixture; redistribution permission not established.",
+      "dart": "2.19.6 (stable) (Tue Mar 28 13:41:04 2023 +0000) on \"linux_simarm64\"",
+      "target": {
+        "arch": "arm64",
+        "thread": "x26",
+        "pool": "x27",
+        "stack": "x15",
+        "entrySlots": 0,
+        "os": "ios",
+        "wordSize": 8,
+        "slotSize": 8,
+        "compressed": false,
+        "endian": "little",
+        "snapshotHash": "adb4292f3ec25074ca70abcd2d5c7251",
+        "snapshotFlags": [
+          "product",
+          "no-code_comments",
+          "dwarf_stack_traces_mode",
+          "no-lazy_dispatchers",
+          "dedup_instructions",
+          "no-asserts",
+          "arm64",
+          "ios",
+          "no-compressed-pointers",
+          "no-null-safety"
+        ]
+      },
+      "image": {
+        "format": "macho",
+        "sha256": "5dcbba566efe877651e50d016caad5a652fffb35ecfa3d1c2616c3bf00ccee59",
+        "sliceOffset": "0x0",
+        "fileSize": 62425056
+      },
+      "codeUnits": 33439,
+      "analysisState": "available",
+      "files": [
+        {
+          "name": "App",
+          "size": 62425056,
+          "sha256": "5dcbba566efe877651e50d016caad5a652fffb35ecfa3d1c2616c3bf00ccee59"
+        },
+        {
+          "name": "b4a.json",
+          "size": 154143406,
+          "sha256": "55acbb22b8c67d61f526142d614d04814aeb343db655b20b824a170bb9c47b01"
+        }
+      ]
+    },
+    {
+      "name": "macos-arm64",
+      "binary": "macos-arm64/App",
+      "metadata": "macos-arm64/b4a.json",
+      "origin": "User-provided local application fixture; redistribution permission not established.",
+      "dart": "3.11.5 (stable) (Wed Apr 15 00:36:32 2026 -0700) on \"linux_simarm64\"",
+      "target": {
+        "arch": "arm64",
+        "thread": "x26",
+        "pool": "x27",
+        "stack": "x15",
+        "entrySlots": 0,
+        "os": "macos",
+        "wordSize": 8,
+        "slotSize": 8,
+        "compressed": false,
+        "endian": "little",
+        "snapshotHash": "78da37fed6bf1489361a312568249f3f",
+        "snapshotFlags": [
+          "product",
+          "no-code_comments",
+          "no-dwarf_stack_traces_mode",
+          "dedup_instructions",
+          "no-asan",
+          "no-msan",
+          "no-tsan",
+          "no-shared_data",
+          "arm64",
+          "macos",
+          "no-compressed-pointers"
+        ]
+      },
+      "image": {
+        "format": "macho",
+        "sha256": "a3c7c18b6e9d227819d16fae8b99337333e4afb622c51d334ee7907d651a0091",
+        "sliceOffset": "0x2da8000",
+        "fileSize": 46400576
+      },
+      "codeUnits": 93982,
+      "analysisState": "available",
+      "files": [
+        {
+          "name": "App",
+          "size": 94274624,
+          "sha256": "70c223a237da7dd613f1099c5c1666fea432034c129a28c052c992b417694e4f"
+        },
+        {
+          "name": "b4a.json",
+          "size": 397346801,
+          "sha256": "31f6e90253eca574a810ccc0c4d6d9f519d465dda992540112e726dd19c96c4e"
+        }
+      ]
+    }
+  ]
+}

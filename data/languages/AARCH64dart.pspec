@@ -7,6 +7,7 @@
     <property key="allowOffcutReferencesToFunctionStarts" value="false" />
     <property key="useNewFunctionStackAnalysis" value="true" />
     <property key="emulateInstructionStateModifierClass" value="ghidra.program.emulation.AARCH64EmulateInstructionStateModifier" />
+    <property key="pcodeInjectLibraryClass" value="ghidart.DartPcodeInjectLibrary" />
     <property key="useropLibs" value="aarch64" />
   </properties>
   <programcounter register="pc" />

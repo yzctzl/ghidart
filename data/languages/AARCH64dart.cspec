@@ -178,4 +178,104 @@
       </killedbycall>
     </prototype>
   </default_proto>
+  <!-- Lowered C++ RuntimeEntry: x0 points to a 32-byte NativeArguments copy.
+       The source signature is void(NativeArguments), not void(NativeArguments*).
+       This is not the Dart-side trampoline ABI.
+       CallToRuntimeStub explicitly switches sp/x15 around this call.
+       This model is not a general FFI or platform C ABI. It describes only
+       native parameter/result storage and clobbers, not another instruction set.
+       The compiler-wide stack pointer remains x15: naming a second prototype
+       does not give it an independent sp-based stack space. The explicit
+       instruction sequence must restore the managed stack after the call.
+       The recognizer proves the actual lowering and binds a NativeArguments
+       stack object. A separate callfixup exposes the actual RuntimeStub body
+       to prepared callers, including its argc-dependent stack result slot. -->
+  <prototype name="__dart_runtime_entry" extrapop="0" stackshift="0">
+    <input>
+      <pentry minsize="1" maxsize="8"><register name="x0" /></pentry>
+      <pentry minsize="1" maxsize="500" align="8">
+        <addr offset="0" space="stack" />
+      </pentry>
+      <!-- AAPCS64 passes aggregates larger than 16 bytes indirectly. Keep the
+           source type by value so the decompiler sees the copied fields. -->
+      <rule>
+        <datatype name="struct" minsize="17" />
+        <convert_to_ptr />
+      </rule>
+    </input>
+    <output />
+    <unaffected>
+      <register name="x19" />
+      <register name="x20" />
+      <register name="x21" />
+      <register name="x22" />
+      <register name="x23" />
+      <register name="x24" />
+      <register name="x25" />
+      <register name="x26" />
+      <register name="x27" />
+      <register name="x28" />
+      <register name="x29" />
+      <register name="x30" />
+      <register name="sp" />
+      <register name="d8" />
+      <register name="d9" />
+      <register name="d10" />
+      <register name="d11" />
+      <register name="d12" />
+      <register name="d13" />
+      <register name="d14" />
+      <register name="d15" />
+    </unaffected>
+    <killedbycall>
+      <register name="x0" />
+      <register name="x1" />
+      <register name="x2" />
+      <register name="x3" />
+      <register name="x4" />
+      <register name="x5" />
+      <register name="x6" />
+      <register name="x7" />
+      <register name="x8" />
+      <register name="x9" />
+      <register name="x10" />
+      <register name="x11" />
+      <register name="x12" />
+      <register name="x13" />
+      <register name="x14" />
+      <register name="x15" />
+      <register name="x16" />
+      <register name="x17" />
+      <register name="x18" />
+      <register name="q0" />
+      <register name="q1" />
+      <register name="q2" />
+      <register name="q3" />
+      <register name="q4" />
+      <register name="q5" />
+      <register name="q6" />
+      <register name="q7" />
+      <register name="q16" />
+      <register name="q17" />
+      <register name="q18" />
+      <register name="q19" />
+      <register name="q20" />
+      <register name="q21" />
+      <register name="q22" />
+      <register name="q23" />
+      <register name="q24" />
+      <register name="q25" />
+      <register name="q26" />
+      <register name="q27" />
+      <register name="q28" />
+      <register name="q29" />
+      <register name="q30" />
+      <register name="q31" />
+    </killedbycall>
+  </prototype>
+  <!-- Inline only a semantically proved, straight-line RuntimeStub. The Java
+       payload copies official instruction p-code; no SDK-specific microcode. -->
+  <callfixup name="dart_runtime_stub">
+    <pcode dynamic="true" />
+  </callfixup>
 </compiler_spec>

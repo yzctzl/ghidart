@@ -5,8 +5,10 @@
  * parameter-identification command recovers actual inputs across the call graph.
  * A bounded return supplement handles invariant NULL_REG and known forwarded
  * results, rejecting ambiguous paths and later writes to result registers.
- * Whole-program recovery remains opt-in. Physical instructions and debugger
- * registers remain unchanged; incomplete CFGs keep conservative signatures.
+ * Runtime contracts are prepared bottom-up. A narrowly scoped official
+ * callfixup exposes a proved RuntimeStub's actual decoded stack side effects;
+ * it does not maintain handwritten instruction semantics. Whole-program
+ * recovery remains opt-in; bytes and the debugger's register view are unchanged.
  */
 package ghidart;
 
@@ -91,6 +93,16 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
       }
     }
     log.appendMsg(getName(), incomplete + " incomplete CFGs left without inferred signatures.");
+    int runtimeCalls = 0;
+    for (Function function : bottomUp) {
+      try {
+        runtimeCalls += DartRuntimeCalls.recover(program, function, monitor);
+      } catch (InvalidInputException e) {
+        log.appendMsg(getName(), "Runtime contract rejected at " + function.getEntryPoint()
+            + ": " + e.getMessage());
+      }
+    }
+    log.appendMsg(getName(), runtimeCalls + " proved RuntimeEntry call sites recovered.");
     var nativeRecovery = new DecompilerParameterIdCmd(
         getName(), safeEntries, SourceType.DEFAULT, true, false, 20);
     if (!nativeRecovery.applyTo(program, monitor)) {

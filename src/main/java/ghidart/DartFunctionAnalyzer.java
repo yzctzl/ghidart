@@ -19,6 +19,7 @@ import ghidra.program.database.function.OverlappingFunctionException;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
+import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.BookmarkType;
 import ghidra.program.model.listing.FlowOverride;
 import ghidra.program.model.listing.Instruction;
@@ -118,7 +119,9 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
     if (!"AARCH64:LE:64:dart".equals(program.getLanguageID().toString())) {
       throw new IllegalArgumentException("Dart ARM64 language required");
     }
-    var discovery = new Discovery(program, executableRegion(program, selectedRegion), monitor);
+    AddressSet region = executableRegion(program, selectedRegion);
+    prepareInstructionSnapshots(program, region, monitor);
+    var discovery = new Discovery(program, region, monitor);
     discovery.addEntries(seeds);
     if (scan) {
       discovery.candidates.add(scanCandidates(program, discovery.region, monitor));
@@ -134,6 +137,28 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
       discovery.run(log);
     } finally {
       if (discovery.switchDecompiler != null) discovery.switchDecompiler.dispose();
+    }
+  }
+
+  /** Remove only imported instruction-snapshot undefined arrays that block decoding.
+   * ELF STT_OBJECT symbols describe storage, not typed data. Keep their labels
+   * and bytes, and preserve all other data definitions. No snapshot parsing or
+   * external index is needed; discovery remains restricted to the selected region.
+   */
+  static void prepareInstructionSnapshots(Program program, AddressSetView region,
+      TaskMonitor monitor) throws CancelledException {
+    for (String name : List.of(
+        "_kDartVmSnapshotInstructions", "_kDartIsolateSnapshotInstructions")) {
+      for (var symbol : program.getSymbolTable().getGlobalSymbols(name)) {
+        monitor.checkCancelled();
+        if (symbol.getSource() != SourceType.IMPORTED || !symbol.isPrimary()) continue;
+        var data = program.getListing().getDefinedDataAt(symbol.getAddress());
+        if (data != null && Undefined.isUndefinedArray(data.getDataType())
+            && region.intersects(data.getMinAddress(), data.getMaxAddress())) {
+          program.getListing().clearCodeUnits(
+              data.getMinAddress(), data.getMaxAddress(), false, monitor);
+        }
+      }
     }
   }
 

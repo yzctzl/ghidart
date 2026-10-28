@@ -21,8 +21,6 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Function;
-import ghidra.program.model.listing.Data;
-import ghidra.program.model.data.Undefined;
 import ghidra.util.exception.InvalidInputException;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
@@ -86,7 +84,8 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     if (metadataPath.isEmpty()) {
       log.appendMsg(
           getName(),
-          "No b4a.json sidecar found; ghidart will not guess Dart function boundaries.");
+          "No b4a.json sidecar found; skipping boundary import. "
+              + "Run Dart Machine Code Functions on the managed code region for independent discovery.");
       return true;
     }
 
@@ -200,22 +199,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
       }
     }
 
-    // ELF STT_OBJECT snapshot symbols may be represented as one large undefined
-    // array. Ghidra refuses to disassemble inside it even though it has no type
-    // information. Clear that placeholder only; never clear typed data or code.
-    for (DartCodeIndex.CodeUnit unit : index.codeUnits()) {
-      Address start = base.add(unit.start());
-      Data data = program.getListing().getDefinedDataContaining(start);
-      if (data != null && Undefined.isUndefinedArray(data.getDataType())) {
-        Symbol symbol = program.getSymbolTable().getPrimarySymbol(data.getMinAddress());
-        if (symbol != null && symbol.getSource() == SourceType.IMPORTED
-            && (symbol.getName().equals("_kDartVmSnapshotInstructions")
-                || symbol.getName().equals("_kDartIsolateSnapshotInstructions"))) {
-          program.getListing().clearCodeUnits(
-              data.getMinAddress(), data.getMaxAddress(), false, monitor);
-        }
-      }
-    }
+    DartFunctionAnalyzer.prepareInstructionSnapshots(program, ranges, monitor);
 
     if (!seeds.isEmpty()) {
       DisassembleCommand command = new DisassembleCommand(seeds, ranges, true);

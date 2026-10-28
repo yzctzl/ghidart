@@ -122,17 +122,24 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
     AddressSet region = executableRegion(program, selectedRegion);
     prepareInstructionSnapshots(program, region, monitor);
     var discovery = new Discovery(program, region, monitor);
+    AddressSet callbackBodies = new AddressSet();
+    if (scan) {
+      callbackBodies = prepareCallbackTables(program, discovery.region, monitor, log);
+    }
     discovery.addEntries(seeds);
     if (scan) {
       discovery.candidates.add(scanCandidates(program, discovery.region, monitor));
       // Decode in one bounded official traversal instead of one command for
       // every instruction of a multi-million-instruction AOT image.
       AddressSet starts = new AddressSet(discovery.candidates);
-      starts.add(seeds);
+      starts.add(seeds.intersect(discovery.region));
       var command = new DisassembleCommand(starts, discovery.region, true);
       command.enableCodeAnalysis(false);
       command.applyTo(program, monitor);
     }
+    // Shared callback bodies enter through the native ABI, not __dart. Keep
+    // them labeled, without promoting their prologue to a managed function.
+    discovery.candidates.delete(callbackBodies);
     try {
       discovery.run(log);
     } finally {
@@ -159,6 +166,114 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
               data.getMinAddress(), data.getMaxAddress(), false, monitor);
         }
       }
+    }
+  }
+
+  /** Recognize the SDK's PC-keyed callback table, not arbitrary indirect jumps.
+   * SDK 3.9.2 and 3.13.3 both emit ADR x9,self; B shared for each entry.
+   * The shared body differs between SDK versions. Its native stack prologue
+   * supports identification, but does not prove its ABI or runtime target.
+   */
+  private static AddressSet prepareCallbackTables(Program program, AddressSet region,
+      TaskMonitor monitor, MessageLog log) throws CancelledException {
+    AddressSet bodies = new AddressSet();
+    AddressSet tables = new AddressSet();
+    int count = 0;
+    long entries = 0;
+    for (var range : new AddressSet(region)) {
+      long first = (range.getMinAddress().getOffset() + 3) & ~3L;
+      for (Address start = range.getMinAddress().getNewAddress(first);
+          start.compareTo(range.getMaxAddress()) <= 0; start = start.add(4)) {
+        monitor.checkCancelled();
+        Address body = callbackTarget(program, region, start);
+        if (body == null || body.compareTo(start) <= 0) continue;
+        // Never accept a valid suffix of a damaged or partially selected table.
+        // Check preceding bytes even when they lie outside the selection.
+        try {
+          Address previous = start.subtract(8);
+          if (program.getMemory().getInt(previous) == 0x10000009) continue;
+          int branch = program.getMemory().getInt(previous.add(4));
+          if ((branch & 0xfc000000) == 0x14000000
+              && previous.add(4).add(((long) (branch << 6) >> 6) * 4).equals(body)) continue;
+        } catch (MemoryAccessException | ghidra.program.model.address.AddressOutOfBoundsException ignored) {
+          // A table can begin at the first mapped address.
+        }
+        long length = body.subtract(start);
+        // Require several independent PC keys. No page size, SDK version or
+        // platform-specific number of callbacks is built into the recognizer.
+        if (length < 64 || length % 8 != 0 || !region.contains(start, body.add(3))) continue;
+        Address end = body.subtract(1);
+        var nextData = program.getListing().getDefinedDataAfter(start);
+        if (program.getListing().getDefinedDataContaining(start) != null) continue;
+        if (nextData != null && nextData.getMinAddress().compareTo(end) <= 0) continue;
+        if (program.getFunctionManager().getFunctionsOverlapping(
+            new AddressSet(start, end)).hasNext()) continue;
+        boolean valid = hasNativeCallbackPrologue(program, body);
+        for (Address row = start; valid && row.compareTo(body) < 0; row = row.add(8)) {
+          monitor.checkCancelled();
+          valid = body.equals(callbackTarget(program, region, row));
+        }
+        if (!valid) continue;
+        AddressSet table = new AddressSet(start, end);
+        AddressSet starts = new AddressSet();
+        for (Address row = start; row.compareTo(body) < 0; row = row.add(8)) {
+          monitor.checkCancelled();
+          starts.add(row);
+          callbackLabel(program, row, "dart_ffi_callback_");
+        }
+        var command = new DisassembleCommand(starts, table, false);
+        command.enableCodeAnalysis(false);
+        command.applyTo(program, monitor);
+        callbackLabel(program, body, "dart_ffi_callback_shared_");
+        program.getBookmarkManager().setBookmark(start, BookmarkType.INFO, "Dart FFI callbacks",
+            (length / 8) + " PC-keyed native entries; shared body at " + body
+                + ". Runtime callback targets and native ABI are not inferred.");
+        tables.add(table);
+        bodies.add(body);
+        count++;
+        entries += length / 8;
+        start = end.subtract(3);
+      }
+    }
+    // Exclude table bytes from managed CFG discovery, without resolving any
+    // indirect successor or assigning shared code to an arbitrary entry.
+    region.delete(tables);
+    if (count != 0) {
+      log.appendMsg("Dart Machine Code Functions", "Structural FFI callback tables " + count
+          + "; native entries " + entries + "; shared bodies " + bodies.getNumAddresses()
+          + ". Labeled separately; runtime targets and shared-body CFG remain unresolved.");
+    }
+    return bodies;
+  }
+
+  private static Address callbackTarget(Program program, AddressSetView region, Address row) {
+    if (!region.contains(row, row.add(7))) return null;
+    try {
+      if (program.getMemory().getInt(row) != 0x10000009) return null; // ADR x9, self.
+      int branch = program.getMemory().getInt(row.add(4));
+      if ((branch & 0xfc000000) != 0x14000000) return null; // B, never BL.
+      Address target = row.add(4).add(((long) (branch << 6) >> 6) * 4);
+      return region.contains(target) ? target : null;
+    } catch (MemoryAccessException | ghidra.program.model.address.AddressOutOfBoundsException e) {
+      return null;
+    }
+  }
+
+  private static boolean hasNativeCallbackPrologue(Program program, Address body) {
+    try {
+      // SDKs save LR alongside THR or FP on the native stack. The rest of the
+      // body changes across versions and is deliberately left to normal analysis.
+      return (program.getMemory().getInt(body) & ~31) == (0xa9bf7bfa & ~31);
+    } catch (MemoryAccessException e) {
+      return false;
+    }
+  }
+
+  private static void callbackLabel(Program program, Address address, String prefix) {
+    try {
+      program.getSymbolTable().createLabel(address, prefix + address, SourceType.ANALYSIS);
+    } catch (InvalidInputException e) {
+      throw new IllegalStateException(e);
     }
   }
 

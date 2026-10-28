@@ -2,7 +2,6 @@
 // @category Dart
 
 import ghidra.app.script.GhidraScript;
-import ghidra.app.util.PseudoDisassembler;
 
 public class VerifyDartLanguage extends GhidraScript {
   @Override
@@ -17,8 +16,12 @@ public class VerifyDartLanguage extends GhidraScript {
       }
     }
     for (String[] pair : new String[][] {
-        {"x15", "DART_SP"}, {"x30", "DART_LR"}, {"x26", "DART_THR"}, {"x27", "DART_PP"}}) {
-      if (!currentProgram.getRegister(pair[0]).equals(currentProgram.getRegister(pair[1]))) {
+        {"x4", "ARGS"}, {"x15", "VMSP"}, {"x16", "TMP"}, {"x17", "TMP2"},
+        {"x21", "GDT"}, {"x22", "NULL"}, {"x24", "CODE"}, {"x26", "THR"},
+        {"x27", "PP"}, {"x28", "HBS"}, {"x29", "FP"}, {"x30", "LR"}}) {
+      var physical = currentProgram.getRegister(pair[0]);
+      if (physical == null || !pair[0].equals(physical.getName())
+          || !physical.equals(currentProgram.getRegister(pair[1]))) {
         throw new IllegalStateException("Invalid register alias: " + pair[1]);
       }
     }

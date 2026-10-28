@@ -9,9 +9,33 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.Function;
+import ghidra.program.model.listing.FunctionSignature;
+import ghidra.program.model.pcode.HighFunction;
+import ghidra.program.model.pcode.HighFunctionDBUtil;
+import ghidra.program.model.symbol.SymbolType;
 
 final class DartRuntimeCalls {
   private DartRuntimeCalls() {}
+
+  static ghidra.program.model.symbol.Symbol overrideSymbol(Program program,
+      Function function, Address address) {
+    var space = HighFunction.findOverrideSpace(function);
+    for (var symbol : program.getSymbolTable().getSymbols(address)) {
+      if (space != null && symbol.getParentNamespace().equals(space)
+          && symbol.getSymbolType() == SymbolType.LABEL
+          && HighFunctionDBUtil.readOverride(symbol) != null) return symbol;
+    }
+    return null;
+  }
+
+  static FunctionSignature callSignature(Program program, Function function, Address address) {
+    var symbol = overrideSymbol(program, function, address);
+    var value = symbol == null ? null : HighFunctionDBUtil.readOverride(symbol);
+    return value != null && value.getDataType() instanceof FunctionSignature signature
+        ? signature : null;
+  }
 
   /** Propagate a Thread load through official p-code within one bounded block. */
   static Long threadLoad(Program program, List<Instruction> block, String destination) {

@@ -93,6 +93,8 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
       }
     }
     log.appendMsg(getName(), incomplete + " incomplete CFGs left without inferred signatures.");
+    int helpers = DartThreadCalls.recoverContracts(program, bottomUp, monitor, log);
+    log.appendMsg(getName(), helpers + " SDK helper call contracts recovered.");
     int runtimeCalls = 0;
     for (Function function : bottomUp) {
       try {
@@ -102,6 +104,37 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
             + ": " + e.getMessage());
       }
     }
+    // Thread slots are SDK layout facts. Bind only to an independently proved
+    // RuntimeStub, preparing its function outside the selection when needed.
+    var bindings = DartThreadCalls.resolve(program, bottomUp, monitor, log);
+    var boundCallers = new java.util.LinkedHashSet<Function>();
+    for (var binding : bindings) {
+      boundCallers.add(program.getFunctionManager().getFunctionContaining(binding.getFromAddress()));
+    }
+    int preparedThreadCalls = 0;
+    try {
+      for (var function : boundCallers) {
+        try {
+          runtimeCalls += DartRuntimeCalls.recover(program, function, monitor);
+        } catch (InvalidInputException e) {
+          log.appendMsg(getName(), "THR runtime preparation rejected at "
+              + function.getEntryPoint() + ": " + e.getMessage());
+        }
+      }
+    } finally {
+      // Cancellation or a local/prototype conflict must not leave a newly
+      // redirected CALL whose native contract was never prepared.
+      for (var binding : bindings) {
+        var caller = program.getFunctionManager().getFunctionContaining(binding.getFromAddress());
+        if (caller == null
+            || !DartRuntimeCalls.hasNativeOverride(program, caller, binding.getFromAddress())) {
+          program.getReferenceManager().delete(binding);
+        } else {
+          preparedThreadCalls++;
+        }
+      }
+    }
+    log.appendMsg(getName(), preparedThreadCalls + " THR runtime calls prepared.");
     log.appendMsg(getName(), runtimeCalls + " proved RuntimeEntry call sites recovered.");
     var nativeRecovery = new DecompilerParameterIdCmd(
         getName(), safeEntries, SourceType.DEFAULT, true, false, 20);

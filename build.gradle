@@ -83,7 +83,7 @@ tasks.register('verifySamples', JavaExec) {
 tasks.named('buildExtension') {
     includeEmptyDirs = false
     dependsOn verifySources, prepareAarch64Language
-    exclude 'samples/**', 'tools/**', 'tests/**', 'ghidra_scripts/b4a/**', '.git/**', '.gitignore', '.vscode/**',
+    exclude 'samples/**', 'tools/**', 'tests/**', 'local/**', 'ghidra_scripts/b4a/**', '.git/**', '.gitignore', '.vscode/**',
         'gradle.properties', 'ghidart-OLD/**'
     // Exclude the local Ghidra distribution.
     exclude { it.relativePath.segments[0].matches('ghidra_[0-9].*') }

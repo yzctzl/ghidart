@@ -1,31 +1,75 @@
 # ghidart
 
-Dart AOT 的 Ghidra 实验扩展，当前提交建立 ARM64 处理器基础。
-使用构建所选 Ghidra 安装中的官方 AARCH64 解码器，不维护另一份指令集。
-物理寄存器名保持不变，以 alias 表达 Dart 角色。
+English | [简体中文](README.zh-CN.md)
 
-## 构建
+A Ghidra extension for Dart AOT, currently supporting ARM64.
+It reuses Ghidra's official ARM64 decoder and decompiler, preserving original
+instructions and physical register names.
 
-环境：Ghidra 12.2 PUBLIC、Java 25、Gradle 9.1.0。
+Features:
+
+- Dart managed ABI: X15 stack, CPU/FPU/stack arguments, returns and register preservation.
+- Independent machine-code function discovery, control-flow analysis and call-chain argument/return recovery.
+- RuntimeEntry, write-barrier, stack-check and Mint helper contracts for verified SDKs.
+- Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
+
+**Experimental: correctness and stability have not been comprehensively verified.**
+Unknown indirect branches, SDKs and calling conventions remain unknown.
+General native/FFI support, live Runtime returns on dynamic stacks and on-device
+debugging are not fully supported or validated. Import of b4a classes, names,
+object pools and higher-level analysis is also incomplete.
+
+## Installation
+
+Requires Ghidra 12.2 PUBLIC and Java 25. A Gradle Wrapper is included.
 
 ```sh
 export JAVA_HOME=/path/to/jdk-25
 export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.2_PUBLIC
-./gradlew --no-daemon buildExtension verifySamples
+./gradlew --no-daemon buildExtension
 ```
 
-Windows 使用 `gradlew.bat`。在 Ghidra 中安装 `dist/` 的扩展并重启。
-使用官方 ELF/Mach-O Loader，手动选择 `AARCH64:LE:64:dart`、编译器 `dart`。
-`tools/VerifyDartLanguage.java` 检查语言加载、物理寄存器及 Dart 别名。
+Install the ZIP from `dist/` through Ghidra's **File → Install Extensions**, then
+restart Ghidra. Alternatively, run `./gradlew --no-daemon installExtension` to
+install into the Ghidra directory above. Restart any running Ghidra after updating.
 
-当前只是处理器基础，旧 ABI 仍待第二阶段校正，不能视作完整反编译支持。
-包括旧 `returnaddress=x0` 等问题将在 ABI 阶段修正；本提交不声明调用约定正确。
-独立 AOT 识别、函数发现和动态调试尚未实现。
-b4a 导入原型保留在 `ghidra_scripts/b4a/`，暂不随扩展打包。
+## Usage
 
-旧通用 SLEIGH、函数模式和构建材料不再放在源码树中；原始内容保留在初始归档提交 `f3d5172`。
-恢复的模板源码保留，但不编译、不发布；旧 Analyzer/Loader demo 不进入运行 JAR。
-源码不得当作缓存清理。迁移时另行携带 Git 忽略的 `samples/`。
+1. For ELF, choose **Dart AOT ELF**. For Mach-O, use the official loader and select
+   language `AARCH64:LE:64:dart`, compiler `dart`; choose the ARM64 slice for FAT files.
+2. Place a matching `b4a.json` beside the binary, or set
+   **Dart AOT Code Boundaries → b4a.json path**. Identity or mapping mismatches reject the import.
+3. Without boundary data, select a Dart managed code region and run
+   **Dart Machine Code Functions** once. Add known entries through **Confirmed entry addresses**.
+4. Run **Dart ABI** on the functions and relevant callees, then open the decompiler.
 
-接口见 [B4A_INTERFACE.md](B4A_INTERFACE.md)，本地样例见 [samples/README.md](samples/README.md)。
-保留 [Apache 2.0 许可](LICENSE) 与 Ghidra 原始文件头。
+Machine-code discovery and ABI analysis are disabled by default to avoid scanning
+mixed native code or decompiling the entire input during import. Incomplete control
+flow is marked `Dart: incomplete CFG`. User-edited bodies, signatures and call-site
+prototypes are protected.
+
+Exact SDK helper profiles have been verified for Android 3.10.8, iOS 2.19.6 and
+macOS 3.11.5. Other versions can still use the general managed ABI; special contracts
+apply only when identity, layout and instruction evidence match.
+
+## Files and verification
+
+Sources are in `src/main/java/ghidart/`; language definitions are in `data/languages/`.
+The build copies the official decoder, avoiding a separately maintained ARM64 instruction set.
+See [B4A_INTERFACE.md](B4A_INTERFACE.md) for the b4a data format.
+
+The original lightweight verifiers are in `tests/`. Local application samples and
+large validation materials are excluded from the release package. With matching
+binaries and `b4a.json` samples available, run offline identity checks:
+
+```sh
+./gradlew --no-daemon verifySamples -PsamplesDir=/path/to/samples
+```
+
+See [samples/README.md](samples/README.md) for the directory layout. Passing these
+checks does not mean Ghidra analysis has run. See [LICENSE](LICENSE) for licensing
+and template attribution.
+
+English is the default documentation language. Keep this README and
+[README.zh-CN.md](README.zh-CN.md) synchronized whenever either changes.
+Interface, sample and test documentation is maintained in English only.

@@ -1,18 +1,7 @@
-/* ###
- * IP: GHIDRA
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * 
- *      http://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+// Build the Dart extension against the selected Ghidra installation.
+// Official buildExtension.gradle owns compilation and packaging. Local tasks
+// stage the official ARM64 decoder and compile the deferred b4a integration
+// for offline sample checks. Tests and application samples are never packaged.
 // Build against an explicit Ghidra installation; no b4a checkout is required.
 def ghidraInstallDir = project.findProperty('GHIDRA_INSTALL_DIR') ?: System.getenv('GHIDRA_INSTALL_DIR')
 if (!ghidraInstallDir) {
@@ -20,15 +9,8 @@ if (!ghidraInstallDir) {
 }
 apply from: new File(ghidraInstallDir, 'support/buildExtension.gradle')
 
-// Keep recovered templates in source control, but out of the runtime extension.
-sourceSets.main.java.exclude 'ghidart/ghidartPlugin.java',
-    'ghidart/ghidartExporter.java', 'ghidart/ghidartFileSystem.java'
 tasks.named('processResources') {
     exclude 'META-INF/plugin.xml', 'META-INF/pluginIcon.svg', 'images/README.txt'
-}
-tasks.named('jar') {
-    // Old demos are not valid Dart discovery; their replacements are separate work.
-    exclude 'ghidart/ghidartAnalyzer*.class', 'ghidart/ghidartLoader*.class'
 }
 
 // ghidart changes Dart semantics, not the AArch64 instruction decoder. Keep the
@@ -72,7 +54,7 @@ def prepareAarch64Language = tasks.register('prepareAarch64Language') {
 def compileB4aIntegration = tasks.register('compileB4aIntegration', JavaCompile) {
     group = 'verification'
     description = 'Compile the deferred b4a importer and offline sample verifier.'
-    source 'ghidra_scripts/b4a/ImportB4a.java', 'tools/VerifyB4a.java'
+    source 'ghidra_scripts/b4a/ImportB4a.java', 'tests/VerifyB4a.java'
     classpath = sourceSets.main.compileClasspath
     destinationDirectory = layout.buildDirectory.dir('b4a-integration-classes')
     options.encoding = 'UTF-8'
@@ -99,11 +81,48 @@ tasks.register('verifySamples', JavaExec) {
 }
 
 tasks.named('buildExtension') {
+    includeEmptyDirs = false
     dependsOn verifySources, prepareAarch64Language
-    exclude 'samples/**', 'tools/**', '.git/**', '.gitignore', '.vscode/**',
+    exclude 'samples/**', 'tools/**', 'tests/**', 'ghidra_scripts/b4a/**', '.git/**', '.gitignore', '.vscode/**',
         'gradle.properties', 'ghidart-OLD/**'
-    // b4a import is retained as deferred integration work, not shipped as core functionality yet.
-    exclude 'ghidra_scripts/b4a/**'
-    // Exclude local distributions while preserving ghidra_scripts/.
+    // Exclude the local Ghidra distribution.
     exclude { it.relativePath.segments[0].matches('ghidra_[0-9].*') }
+}
+
+// Replace files atomically: an already-running JVM may still hold the old JAR.
+// Overwriting that JAR in place breaks its lazy class loading.
+tasks.register('installExtension') {
+    group = 'build'
+    description = 'Install the built extension without overwriting open JAR files in place.'
+    dependsOn tasks.named('buildExtension')
+    doLast {
+        def archive = tasks.named('buildExtension').get().archiveFile.get().asFile
+        def destination = new File(ghidraInstallDir, 'Ghidra/Extensions').toPath()
+        def zip = new java.util.zip.ZipFile(archive)
+        try {
+            zip.entries().each { entry ->
+                def target = destination.resolve(entry.name).normalize()
+                if (!target.startsWith(destination)) {
+                    throw new GradleException("Invalid extension archive path: ${entry.name}")
+                }
+                if (!entry.directory) {
+                    java.nio.file.Files.createDirectories(target.parent)
+                    def temporary = java.nio.file.Files.createTempFile(target.parent, '.ghidart-', '.tmp')
+                    try {
+                        zip.getInputStream(entry).withCloseable { input ->
+                            java.nio.file.Files.copy(input, temporary, java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        }
+                        java.nio.file.Files.move(temporary, target,
+                            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    } finally {
+                        java.nio.file.Files.deleteIfExists(temporary)
+                    }
+                }
+            }
+        } finally {
+            zip.close()
+        }
+        logger.lifecycle('Installed ghidart. Restart an existing Ghidra session to load this version.')
+    }
 }

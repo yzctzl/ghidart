@@ -1,4 +1,4 @@
-/ghidra_[0-9]*/
+/ghidra_[0-9]*
 /.gradle/
 /build/
 /bin/
@@ -16,3 +16,9 @@
 
 # Local application fixtures and analysis exports; carry them when migrating.
 /samples/*/
+/tests/*
+!/tests/VerifyB4a.java
+!/tests/VerifyDartLanguage.java
+
+# Local research notes and validation material.
+/local/

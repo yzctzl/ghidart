@@ -9,7 +9,7 @@ Dart AOT 的 Ghidra 扩展，目前支持 ARM64。
 
 - Dart managed ABI：X15 栈、CPU/FPU/栈参数、返回值和寄存器保存规则。
 - 独立的机器码函数发现、控制流分析和调用链参数/返回值恢复。
-- 已验证 SDK 的 RuntimeEntry、写屏障、栈检查及 Mint helper 契约。
+- 依据支持的机器码模式恢复 RuntimeEntry、写屏障、栈检查及 Mint helper 契约。
 - 可选读取配套 `b4a.json`，校验二进制身份和映射后导入代码边界及多入口标签。
 
 **仍是实验项目，正确性与稳定性尚未经过全面验证。** 未知间接跳转、SDK 或调用约定保留为未知。
@@ -45,8 +45,9 @@ export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.2_PUBLIC
 ghidart 的消息显示在 Ghidra Console 中。Dart 语言使用 `VMSP`、`THR` 等寄存器名；
 物理名 `x15`、`x26` 等仍是同一寄存器的别名，供调试使用。
 
-精确 SDK helper 配置目前验证了 Android 3.10.8、iOS 2.19.6、macOS 3.11.5。
-其他版本仍可使用通用 managed ABI；特殊契约仅在身份、布局及指令证据匹配时应用。
+L1 ABI 分析依据机器码，不依赖快照 hash 或 Thread 布局配置。
+为支持的栈检查和写屏障调用点建立局部契约；直接 shared helper 还需要验证保存、恢复和结果槽。
+无法确定目标地址的间接调用保留原样。L2/L3 元数据可提供更强的信息。
 
 ## 文件与校验
 

@@ -1,72 +1,44 @@
 /**
- * Resolve SDK Thread calls and their distinct register contracts.
+ * Recover helper call effects from ARM64 code, independently of AOT metadata.
  *
- * Snapshot hash and build features select upstream SDK layout facts, not an
- * application address. A matching CODE_REG load and complete NativeArguments
- * proof identify the target function. Bounded p-code data flow then
- * proves a caller's indirect target came from that slot. Only an official call
- * destination reference is added; physical instructions/registers stay intact.
- * Unknown layouts, ambiguous targets and existing call metadata are preserved.
- * RuntimeEntry still requires its actual bridge-body proof. Barrier and shared
- * helper contracts use exact SDK ABI/layout facts and proved target provenance.
- * Unknown helpers/native calls keep the conservative managed fallback.
+ * Direct shared helpers must exhibit their actual saves, frame, runtime call,
+ * result-slot update and restores. Indirect calls require the complete local
+ * stack-check or write-barrier idiom emitted by the Dart compiler. These are
+ * bounded codegen recognizers, not assumptions about a Thread field number.
+ * An ABI contract never creates a destination address for an indirect call.
+ * Snapshot hashes, feature strings, image headers and SDK layouts are unused.
  */
 package ghidart;
 
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.lang.Register;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.symbol.RefType;
-import ghidra.program.model.symbol.Reference;
+import ghidra.program.model.pcode.PcodeOp;
+import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.TaskMonitor;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
-/** Keeps versioned layout facts separate from the ABI's instruction proof. */
+/** Per-call machine evidence; no whole-VM layout selection or global scan. */
 final class DartThreadCalls {
   private DartThreadCalls() {}
 
-  // Generated SDK AOT + PRODUCT + ARM64 offsets, selected by exact snapshot
-  // hash, OS and pointer mode. Sources: AOT_Thread in compiler/runtime_api.cc and ARM64 stub/compiler ABIs.
-  // No nearest-version fallback: unknown/custom SDK layouts remain unresolved.
-  private record Shared(long entry, long code, boolean mint, boolean fpu) {}
-  private record Layout(String hash, String os, String pointers, long entry, long code,
-      long barrier, long arrayBarrier, long wrappers, List<Shared> shared) {}
+  private record
+      Contract(String name, List<String> inputs, boolean result, boolean array, int savedFpu) {}
+  private record Save(List<Register> registers, int bytes) {}
 
-  private static final List<Layout> LAYOUTS = List.of(
-      new Layout("adb4292f3ec25074ca70abcd2d5c7251", "ios", "no-compressed-pointers", 0x258, 0x110,
-          0x248, 0x250, 0x638, List.of(
-              new Shared(0x288, 0x1c8, false, false),
-              new Shared(0x290, 0x1d0, false, true),
-              new Shared(0x268, 0x180, true, false),
-              new Shared(0x260, 0x178, true, true))),
-      new Layout("1ce86630892e2dca9a8543fdb8ed8e22", "android", "compressed-pointers", 0x208, 0xd8,
-          0x1f8, 0x200, 0x570, List.of(
-              new Shared(0x238, 0x188, false, false),
-              new Shared(0x240, 0x190, false, true),
-              new Shared(0x218, 0x158, true, false),
-              new Shared(0x210, 0x150, true, true))),
-      new Layout("78da37fed6bf1489361a312568249f3f", "macos", "no-compressed-pointers", 0x208, 0xd8,
-          0x1f8, 0x200, 0x578, List.of(
-              new Shared(0x238, 0x188, false, false),
-              new Shared(0x240, 0x190, false, true),
-              new Shared(0x218, 0x158, true, false),
-              new Shared(0x210, 0x150, true, true))));
+  // AddAllNonReservedRegisters in the ARM64 SDK. Roles, not Thread offsets.
+  private static final int[] AVAILABLE = {
+      0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 19, 20, 23, 24, 25};
 
-  /** Known SDK helpers have a different clobber contract from managed Dart.
-   * Preserve the opaque CALL and use the official per-call prototype API;
-   * no whole-stub inlining or handwritten instruction semantics are needed.
-   */
-  static int recoverContracts(Program program, List<Function> callers,
-      TaskMonitor monitor, MessageLog log) throws CancelledException {
-    Layout layout = layout(program);
+  static int recoverContracts(Program program, List<Function> callers, TaskMonitor monitor,
+      MessageLog log) throws CancelledException {
     var properties = program.getUsrPropertyManager();
     var generated = properties.getStringPropertyMap("ghidart.L1.helperCalls");
     if (generated == null) {
@@ -77,7 +49,7 @@ final class DartThreadCalls {
       }
     }
     int recovered = 0;
-    var sharedTargets = new java.util.HashMap<Address, Shared>();
+    var targets = new java.util.HashMap<Address, Contract>();
     for (Function caller : callers) {
       // Body edits and instruction removal can hide old call sites from the
       // instruction iterator. Inspect our namespace facts before visiting code.
@@ -108,95 +80,136 @@ final class DartThreadCalls {
       while (instructions.hasNext()) {
         monitor.checkCancelled();
         Instruction call = instructions.next();
+        discardShadowedContract(program, caller, call.getAddress(), generated);
         var existing = DartRuntimeCalls.callSignature(program, caller, call.getAddress());
-        boolean owned = existing != null && existing.getPrototypeString(true)
-            .equals(generated.getString(call.getAddress()));
-        if (existing != null && !owned) continue;
-        if (layout == null || !call.getFlowType().isCall()) {
-          if (owned) clearContract(program, caller, call.getAddress(), generated);
+        boolean owned = existing != null
+            && existing.getPrototypeString(true).equals(generated.getString(call.getAddress()));
+        if (existing != null && !owned) {
           continue;
         }
-        Long slot = call.getFlowType().isComputed() ? targetSlot(program, caller, call) : null;
-        Shared shared = null;
-        if (slot != null) {
-          for (Shared candidate : layout.shared()) {
-            if (slot == candidate.entry()) shared = candidate;
+        if (!call.getFlowType().isCall()) {
+          if (owned) {
+            clearContract(program, caller, call.getAddress(), generated);
           }
-        } else if (!call.getFlowType().isComputed() && call.getFlows().length == 1) {
+          continue;
+        }
+        Contract contract = null;
+        if (!call.getFlowType().isComputed() && call.getFlows().length == 1) {
           Address target = call.getFlows()[0];
-          if (!sharedTargets.containsKey(target)) {
-            sharedTargets.put(target, sharedAt(program, target, layout, monitor));
+          if (!targets.containsKey(target)) {
+            targets.put(target, sharedAt(program, target, monitor));
           }
-          shared = sharedTargets.get(target);
+          contract = targets.get(target);
         }
-        int object = -1;
-        boolean array = slot != null && slot == layout.arrayBarrier();
-        if (slot != null && (slot == layout.barrier() || array)) object = 1;
-        if (slot != null && slot >= layout.wrappers() && (slot - layout.wrappers()) % 8 == 0) {
-          int[] available = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-              19, 20, 23, 24, 25};
-          long ordinal = (slot - layout.wrappers()) / 8;
-          if (ordinal < available.length) object = available[(int) ordinal];
+        boolean threadCall =
+            call.getFlowType().isComputed() && targetSlot(program, caller, call) != null;
+        if (contract == null && (!call.getFlowType().isComputed() || threadCall)) {
+          contract = barrierAt(program, caller, call);
+          if (contract == null && threadCall) {
+            contract = guardAt(program, caller, call, monitor);
+          }
         }
-        if (shared == null && object < 0) {
-          if (owned) clearContract(program, caller, call.getAddress(), generated);
+        if (contract == null) {
+          if (owned) {
+            clearContract(program, caller, call.getAddress(), generated);
+          }
           continue;
         }
-        String name = shared != null
-            ? "__dart_" + (shared.mint() ? "mint" : "guard") + (shared.fpu() ? "_fpu" : "")
-            : array ? "__dart_array_barrier" : "__dart_barrier_x" + object;
-        if (owned && name.equals(existing.getCallingConventionName())) continue;
-        if (owned) clearContract(program, caller, call.getAddress(), generated);
-        if (!caller.getSignatureSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS)) continue;
-        var arguments = new ArrayList<String>();
-        if (shared == null) {
-          arguments.add("x0");
-          if (object != 0) arguments.add("x" + object);
-          if (array) arguments.add("x25");
+        String name = contract.name();
+        if (owned && name.equals(existing.getCallingConventionName())) {
+          continue;
         }
-        boolean mint = shared != null && shared.mint();
-        int savedFpu = shared == null ? 31 : shared.fpu() ? 32 : 0;
+        if (owned) {
+          clearContract(program, caller, call.getAddress(), generated);
+        }
+        if (!caller.getSignatureSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS)) {
+          continue;
+        }
+        var arguments = contract.inputs();
+        boolean mint = contract.result();
         try {
-          String xml = prototype(name, arguments, mint, array, savedFpu);
-          var prior = ghidra.program.database.SpecExtension.getCompilerSpecExtension(program,
-              ghidra.program.database.SpecExtension.Type.PROTOTYPE_MODEL, name);
+          String xml = prototype(name, arguments, mint, contract.array(), contract.savedFpu());
+          var prior = ghidra.program.database.SpecExtension.getCompilerSpecExtension(
+              program, ghidra.program.database.SpecExtension.Type.PROTOTYPE_MODEL, name);
           if (prior != null && !prior.equals(xml)) {
             log.appendMsg("Dart ABI", "Existing helper convention differs: " + name);
             continue;
           }
           if (prior == null) {
-            new ghidra.program.database.SpecExtension(program)
-                .addReplaceCompilerSpecExtension(xml, monitor);
+            new ghidra.program.database.SpecExtension(program).addReplaceCompilerSpecExtension(
+                xml, monitor);
           }
           var signature = new ghidra.program.model.data.FunctionDefinitionDataType(
               name, program.getDataTypeManager());
           signature.setCallingConvention(name);
           signature.setReturnType(mint ? ghidra.program.model.data.Undefined8DataType.dataType
-              : ghidra.program.model.data.VoidDataType.dataType);
+                                       : ghidra.program.model.data.VoidDataType.dataType);
           var parameters = new ArrayList<ghidra.program.model.data.ParameterDefinition>();
           for (String register : arguments) {
-            parameters.add(new ghidra.program.model.data.ParameterDefinitionImpl(register,
-                ghidra.program.model.data.Undefined8DataType.dataType, null));
+            parameters.add(new ghidra.program.model.data.ParameterDefinitionImpl(
+                register, ghidra.program.model.data.Undefined8DataType.dataType, null));
           }
-          signature.setArguments(parameters.toArray(ghidra.program.model.data.ParameterDefinition[]::new));
-          ghidra.program.model.pcode.HighFunctionDBUtil.writeOverride(caller, call.getAddress(), signature);
+          signature.setArguments(
+              parameters.toArray(ghidra.program.model.data.ParameterDefinition[] ::new));
+          ghidra.program.model.pcode.HighFunctionDBUtil.writeOverride(
+              caller, call.getAddress(), signature);
           var written = DartRuntimeCalls.callSignature(program, caller, call.getAddress());
-          if (written != null) generated.add(call.getAddress(), written.getPrototypeString(true));
+          if (written != null) {
+            generated.add(call.getAddress(), written.getPrototypeString(true));
+          }
           recovered++;
         } catch (ghidra.util.exception.InvalidInputException | ghidra.framework.store.LockException
             | org.xml.sax.SAXException | ghidra.xml.XmlParseException e) {
-          log.appendMsg("Dart ABI", "Helper contract rejected at " + call.getAddress() + ": " + e.getMessage());
+          log.appendMsg("Dart ABI",
+              "Helper contract rejected at " + call.getAddress() + ": " + e.getMessage());
         }
       }
     }
     return recovered;
   }
 
+  /**
+   * Callers of Ghidra's override API may add a second symbol
+   * instead of replacing the original. Withdraw only our fingerprinted fact,
+   * leaving the other prototype as authoritative rather than choosing by order.
+   */
+  private static void discardShadowedContract(Program program, Function caller, Address address,
+      ghidra.program.model.util.StringPropertyMap generated) {
+    String fingerprint = generated.getString(address);
+    var space = ghidra.program.model.pcode.HighFunction.findOverrideSpace(caller);
+    if (fingerprint == null || space == null) {
+      return;
+    }
+    var owned = new ArrayList<ghidra.program.model.symbol.Symbol>();
+    boolean other = false;
+    for (var symbol : program.getSymbolTable().getSymbols(address)) {
+      if (!symbol.getParentNamespace().equals(space)) {
+        continue;
+      }
+      var value = ghidra.program.model.pcode.HighFunctionDBUtil.readOverride(symbol);
+      if (value == null
+          || !(value.getDataType()
+                   instanceof ghidra.program.model.listing.FunctionSignature signature)) {
+        continue;
+      }
+      if (fingerprint.equals(signature.getPrototypeString(true))) {
+        owned.add(symbol);
+      } else
+        other = true;
+    }
+    if (other) {
+      owned.forEach(ghidra.program.model.symbol.Symbol::delete);
+      generated.remove(address);
+    }
+  }
+
   /** Remove only our unchanged call-site fact, never a user-edited prototype. */
   private static void clearContract(Program program, Function caller, Address address,
       ghidra.program.model.util.StringPropertyMap generated) {
     var symbol = DartRuntimeCalls.overrideSymbol(program, caller, address);
-    if (symbol != null) symbol.delete();
+    if (symbol != null) {
+      symbol.delete();
+    }
     generated.remove(address);
     boolean automatic = caller.getSignatureSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS)
         && caller.getReturn().getSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS);
@@ -213,338 +226,744 @@ final class DartThreadCalls {
     }
   }
 
-  /** CODE_REG's SDK slot identifies the shared helper; follow only reachable
-   * prefix instructions in the named VM image. Fast allocation may RET before
-   * a branched slow path loads CODE_REG. No app address/name is a match rule.
-   */
-  private static Shared sharedAt(Program program, Address entry, Layout layout,
-      TaskMonitor monitor) throws CancelledException {
-    Address end = null;
-    try {
-      for (String image : List.of("_kDartVmSnapshotInstructions", "_kDartIsolateSnapshotInstructions")) {
-        var symbols = program.getSymbolTable().getGlobalSymbols(image);
-        if (symbols.size() != 1 || symbols.getFirst().getSource() != SourceType.IMPORTED) continue;
-        Address start = symbols.getFirst().getAddress();
-        var block = program.getMemory().getBlock(start);
-        long size = program.getMemory().getLong(start);
-        if (block != null && block.isExecute() && size >= 64 && size % 16 == 0
-            && size <= block.getEnd().subtract(start) + 1
-            && entry.compareTo(start.add(64)) >= 0 && entry.compareTo(start.add(size)) < 0) {
-          end = start.add(size);
-          break;
-        }
-      }
-      if (end == null) return null;
-      var decoder = new ghidra.app.util.PseudoDisassembler(program);
-      var pending = new java.util.ArrayDeque<Address>();
-      var seen = new java.util.HashSet<Address>();
-      pending.add(entry);
-      Shared result = null;
-      while (!pending.isEmpty() && seen.size() < 128) {
-        monitor.checkCancelled();
-        Address address = pending.removeFirst();
-        if (!seen.add(address) || address.compareTo(entry) < 0
-            || address.subtract(entry) > 2048 || address.compareTo(end) >= 0) continue;
-        Instruction instruction = decoder.disassemble(address);
-        if (instruction == null) return null;
-        Long code = DartRuntimeCalls.threadLoad(program, List.of(instruction), "x24");
-        if (code != null) {
-          Shared selected = null;
-          for (Shared candidate : layout.shared()) if (code == candidate.code()) selected = candidate;
-          if (selected == null || result != null && !result.equals(selected)) return null;
-          result = selected;
-          continue;
-        }
-        var flow = instruction.getFlowType();
-        if (flow.isCall() || flow.isComputed()) continue;
-        if (flow.isJump()) for (Address target : instruction.getFlows()) pending.add(target);
-        if (instruction.getFallThrough() != null) pending.add(instruction.getFallThrough());
-      }
-      return pending.isEmpty() ? result : null;
-    } catch (ghidra.program.model.mem.MemoryAccessException
-        | ghidra.program.model.lang.UnknownInstructionException
-        | ghidra.program.model.lang.InsufficientBytesException
-        | ghidra.program.model.lang.UnknownContextException e) {
-      return null;
-    }
-  }
-
-  /** Small generated compiler models, not a separate microcode lifter. The
+  /**
+   * Small generated compiler models, not a separate microcode lifter. The
    * shared variant saves every FPU register; barrier LeafRuntimeScope saves
    * allocatable FPUs and leaves FpuTMP (q31) volatile. Array barrier also uses
    * its slot register x25; Mint's fast path clobbers its x1 temporary.
    */
-  private static String prototype(String name, List<String> inputs, boolean mint,
-      boolean array, int savedFpu) {
-    var xml = new StringBuilder("<prototype name=\"").append(name)
-        .append("\" extrapop=\"0\" stackshift=\"0\"><input>");
+  private static String prototype(
+      String name, List<String> inputs, boolean mint, boolean array, int savedFpu) {
+    var xml = new StringBuilder("<prototype name=\"")
+                  .append(name)
+                  .append("\" extrapop=\"0\" stackshift=\"0\"><input>");
     for (String register : inputs) {
       xml.append("<pentry minsize=\"1\" maxsize=\"8\"><register name=\"")
-          .append(register).append("\"/></pentry>");
+          .append(register)
+          .append("\"/></pentry>");
     }
     // A storage fallback keeps the native model usable for explicit later types.
     xml.append("<pentry minsize=\"1\" maxsize=\"500\" align=\"8\">")
         .append("<addr offset=\"0\" space=\"stack\"/></pentry></input><output>");
-    if (mint) xml.append("<pentry minsize=\"1\" maxsize=\"8\"><register name=\"x0\"/></pentry>");
+    if (mint) {
+      xml.append("<pentry minsize=\"1\" maxsize=\"8\"><register name=\"x0\"/></pentry>");
+    }
     xml.append("</output><unaffected>");
-    for (int register = 0; register < 31; register++) {
+    for (int register = 0; register < 31; register ++) {
       if (register != 16 && register != 17 && !(mint && register < 2)
-          && !(array && register == 25)) xml.append("<register name=\"x").append(register).append("\"/>");
+          && !(array && register == 25)) {
+        xml.append("<register name=\"x").append(register).append("\"/>");
+      }
     }
     xml.append("<register name=\"sp\"/>");
-    for (int register = 0; register < savedFpu; register++) {
+    for (int register = 0; register < savedFpu; register ++) {
       xml.append("<register name=\"q").append(register).append("\"/>");
     }
     xml.append("</unaffected><killedbycall><register name=\"x16\"/><register name=\"x17\"/>");
-    if (mint) xml.append("<register name=\"x0\"/><register name=\"x1\"/>");
-    if (array) xml.append("<register name=\"x25\"/>");
-    for (int register = savedFpu; register < 32; register++) {
+    if (mint) {
+      xml.append("<register name=\"x0\"/><register name=\"x1\"/>");
+    }
+    if (array) {
+      xml.append("<register name=\"x25\"/>");
+    }
+    for (int register = savedFpu; register < 32; register ++) {
       xml.append("<register name=\"q").append(register).append("\"/>");
     }
     return xml.append("</killedbycall></prototype>").toString();
   }
 
-  static List<Reference> resolve(Program program, List<Function> callers,
-      TaskMonitor monitor, MessageLog log) throws CancelledException {
-    Layout layout = layout(program);
-    if (layout == null) {
-      return List.of();
+  private static Long targetSlot(Program program, Function function, Instruction call) {
+    return DartRuntimeCalls.threadLoad(
+        program, DartRuntimeCalls.blockBefore(program, function.getBody(), call), "pc");
+  }
+
+  /**
+   * StoreBarrier / ArrayStoreBarrier in assembler_arm64.cc.
+   * The tag-byte overlap test and HBS mask must guard this exact call. The
+   * preceding store identifies the object and distinguishes the array slot;
+   * the displacement used to fetch the helper is deliberately irrelevant.
+   */
+  private static Contract barrierAt(Program program, Function caller, Instruction call) {
+    Instruction branch = call.getPrevious();
+    for (int distance = 0; distance < 4 && branch != null; distance++) {
+      if (mnemonic(branch, "b.eq")) {
+        break;
+      }
+      if (branch.getFlowType().isCall() || branch.getFlowType().isJump()
+          || branch.getFlowType().isTerminal()) {
+        return null;
+      }
+      branch = branch.getPrevious();
     }
-    Function target = null;
-    var functions = program.getFunctionManager().getFunctions(true);
-    while (functions.hasNext()) {
+    if (!mnemonic(branch, "b.eq") || branch.getFlows().length != 1) {
+      return null;
+    }
+    Address done = branch.getFlows()[0];
+    // The bypass must land just after CALL (and optional LR restore).
+    if (done.compareTo(call.getAddress()) <= 0 || done.subtract(call.getAddress()) > 8) {
+      return null;
+    }
+    var test = branch.getPrevious();
+    var overlap = test == null ? null : test.getPrevious();
+    var valueTag = overlap == null ? null : overlap.getPrevious();
+    var objectTag = valueTag == null ? null : valueTag.getPrevious();
+    var store = objectTag == null ? null : objectTag.getPrevious();
+    var beforeTags = store;
+    Register object = tagBase(objectTag);
+    if (object == null || !program.getRegister("x0").equals(tagBase(valueTag))) {
+      return null;
+    }
+    // BranchIfSmi is optional, but must test the stored value and bypass this
+    // very call. It cannot be skipped as an arbitrary intervening instruction.
+    if (mnemonic(store, "tbz")) {
+      if (!registerOperand(store, 0, program, "x0")
+          || !Long.valueOf(0).equals(displacement(store, 1)) || store.getFlows().length != 1
+          || !done.equals(store.getFlows()[0]) || hasIncoming(program, store)) {
+        return null;
+      }
+      store = store.getPrevious();
+    }
+    if (store == null
+        || !(store == beforeTags ? contiguous(store, objectTag)
+                                 : contiguous(store, beforeTags, objectTag))
+        || !contiguous(objectTag, valueTag, overlap, test, branch)
+        || !caller.getBody().contains(store.getAddress())) {
+      return null;
+    }
+    for (var instruction : List.of(objectTag, valueTag, overlap, test, branch)) {
+      if (hasIncoming(program, instruction)) {
+        return null;
+      }
+    }
+    if (!mnemonic(overlap, "and") || !sameRegister(overlap, 0, objectTag, 0)
+        || !sameRegister(overlap, 1, valueTag, 0) || !sameRegister(overlap, 2, objectTag, 0)
+        || !rightShift(overlap, objectTag.getRegister(0).getBaseRegister(), 2)) {
+      return null;
+    }
+    if (!mnemonic(test, "tst") || !sameRegister(test, 0, overlap, 0)
+        || !rightShift(test, program.getRegister("x28"), 32)) {
+      return null;
+    }
+    Register base = pointerStoreBase(program, store, object);
+    if (!isStore(store) || !registerOperand(store, 0, program, "x0")
+        || (base != null && writesRegister(store, base))) {
+      return null;
+    }
+    boolean array =
+        program.getRegister("x25").equals(base) && program.getRegister("x1").equals(object);
+    if (array ? !program.getRegister("x1").equals(object) : !object.equals(base)) {
+      return null;
+    }
+    // Nothing between the conditional and CALL may shuffle object/value or
+    // create another entry into the slow path. Support the compiler's optional
+    // LR spill, followed by the helper-address load, rather than arbitrary code.
+    boolean spilledLr = false;
+    boolean loadedTarget = false;
+    var cursor = branch.getNext();
+    while (cursor != null && !cursor.getAddress().equals(call.getAddress())) {
+      if (hasIncoming(program, cursor) || !caller.getBody().contains(cursor.getAddress())) {
+        return null;
+      }
+      boolean load = DartRuntimeCalls.threadLoad(program, List.of(cursor), "x30") != null;
+      if (load) {
+        loadedTarget = true;
+      } else {
+        if (loadedTarget || spilledLr
+            || !stackSave(program, cursor, List.of(program.getRegister("x30")), true)) {
+          return null;
+        }
+        spilledLr = true;
+      }
+      cursor = cursor.getNext();
+    }
+    if (cursor == null || hasIncoming(program, call)) {
+      return null;
+    }
+    if (spilledLr != (done.subtract(call.getAddress()) == 8)) {
+      return null;
+    }
+    if (spilledLr
+        && !stackSave(program, call.getNext(), List.of(program.getRegister("x30")), false)) {
+      return null;
+    }
+    int index = -1;
+    for (int candidate : AVAILABLE) {
+      if (program.getRegister("x" + candidate).equals(object)) {
+        index = candidate;
+      }
+    }
+    if (index <= 0) {
+      return null;
+    }
+    var inputs = new ArrayList<String>();
+    inputs.add("x0");
+    if (index != 0) {
+      inputs.add("x" + index);
+    }
+    if (array) {
+      inputs.add("x25");
+    }
+    return new Contract(
+        array ? "__dart_array_barrier" : "__dart_barrier_x" + index, inputs, false, array, 31);
+  }
+
+  /**
+   * CheckStackOverflowInstr + its shared slow path in il_arm64.cc.
+   * Identify the guard edge and its exact continuation, not a known THR slot.
+   * The compiler chooses the FPU-saving variant whenever FPU values are live,
+   * so this call-site contract preserves live FPU values for either variant.
+   */
+  private static Contract guardAt(Program program, Function caller, Instruction call,
+      TaskMonitor monitor) throws CancelledException {
+    var continuation = call.getNext();
+    if (!mnemonic(continuation, "b") || continuation.getFlows().length != 1) {
+      return null;
+    }
+    Address resume = continuation.getFlows()[0];
+    if (!caller.getBody().contains(resume)) {
+      return null;
+    }
+    var prefix = call.getPrevious();
+    if (prefix == null || !contiguous(prefix, call, continuation)
+        || DartRuntimeCalls.threadLoad(program, List.of(prefix), "x30") == null) {
+      return null;
+    }
+    if (hasIncoming(program, call) || !caller.getBody().contains(prefix.getAddress())) {
+      return null;
+    }
+    var incoming = program.getListing().getInstructions(caller.getBody(), true);
+    boolean found = false;
+    while (incoming.hasNext()) {
       monitor.checkCancelled();
-      var function = functions.next();
-      var first = program.getListing().getInstructionAt(function.getEntryPoint());
-      if (first == null || !Long.valueOf(layout.code()).equals(
-          DartRuntimeCalls.threadLoad(program, List.of(first), "x24"))
-          || DartRuntimeCalls.linearRuntimeBody(program, function).isEmpty()) {
+      var branch = incoming.next();
+      if (!List.of(branch.getFlows()).contains(prefix.getAddress())) {
         continue;
       }
-      if (target != null) {
-        log.appendMsg("Dart ABI", "Ambiguous RuntimeStub targets; THR calls left unresolved.");
-        return List.of();
+      if (!mnemonic(branch, "b.ls") || !resume.equals(branch.getFallThrough())) {
+        return null;
       }
-      target = function;
-    }
-    if (target == null) {
-      target = discover(program, layout, monitor, log);
-      if (target == null) {
-        log.appendMsg("Dart ABI", "SDK Thread layout recognized, but no unique proved RuntimeStub"
-            + " is available. THR calls left unresolved.");
-        return List.of();
+      var compare = branch.getPrevious();
+      if (!mnemonic(compare, "cmp") || !registerOperand(compare, 0, program, "x15")) {
+        return null;
       }
-    }
-    try {
-      DartRuntimeCalls.recover(program, target, monitor);
-    } catch (InvalidInputException e) {
-      log.appendMsg("Dart ABI", "RuntimeStub preparation rejected: " + e.getMessage());
-      return List.of();
-    }
-    if (!DartPcodeInjectLibrary.RUNTIME_STUB.equals(target.getCallFixup())) {
-      return List.of();
-    }
-    var created = new ArrayList<Reference>();
-    try {
-      for (var caller : callers) {
-        if (!caller.getSignatureSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS)) {
-          continue;
-        }
-        var instructions = program.getListing().getInstructions(caller.getBody(), true);
-        while (instructions.hasNext()) {
-          monitor.checkCancelled();
-          var call = instructions.next();
-          if (!call.getFlowType().isCall() || !call.getFlowType().isComputed()
-              || DartRuntimeCalls.hasOverride(program, caller, call.getAddress())
-              || program.getReferenceManager().getFlowReferencesFrom(call.getAddress()).length != 0
-              || !Long.valueOf(layout.entry()).equals(targetSlot(program, caller, call))) {
-            continue;
-          }
-          var reference = program.getReferenceManager().addMemoryReference(call.getAddress(),
-              target.getEntryPoint(), RefType.CALL_OVERRIDE_UNCONDITIONAL, SourceType.ANALYSIS, -1);
-          program.getReferenceManager().setPrimary(reference, true);
-          created.add(reference);
-        }
+      var limit = compare.getRegister(1);
+      var load = compare.getPrevious();
+      if (limit == null || !contiguous(load, compare, branch) || !limit.equals(load.getRegister(0))
+          || DartRuntimeCalls.threadLoad(program, List.of(load), limit.getName()) == null) {
+        return null;
       }
-    } catch (CancelledException | RuntimeException e) {
-      created.forEach(program.getReferenceManager()::delete);
-      throw e;
+      found = true;
     }
-    log.appendMsg("Dart ABI", created.size() + " THR runtime targets proved at "
-        + target.getEntryPoint() + ".");
-    return created;
+    return found ? new Contract("__dart_stack_check", List.of(), false, false, 32) : null;
   }
 
-  /** Locate only the ABI bridge, using the SDK image extent and actual semantics. */
-  private static Function discover(Program program, Layout layout, TaskMonitor monitor,
-      MessageLog log) throws CancelledException {
-    var symbols = program.getSymbolTable().getGlobalSymbols("_kDartVmSnapshotInstructions");
-    if (symbols.size() != 1 || symbols.getFirst().getSource() != SourceType.IMPORTED) {
-      return null;
-    }
-    var start = symbols.getFirst().getAddress();
-    var memory = program.getMemory();
-    var block = memory.getBlock(start);
-    if (block == null || !block.isInitialized() || !block.isExecute()) {
-      return null;
-    }
-    var decoder = new ghidra.app.util.PseudoDisassembler(program);
-    List<Instruction> candidate = List.of();
+  /**
+   * GenerateSharedStubGeneric / GenerateSharedStub in stub_code_compiler_arm64.cc.
+   * Match actual stack transfers, allowing register-pair order and equivalent
+   * addressing encodings; never use a CODE slot to stand in for this proof.
+   */
+  private static Contract sharedAt(Program program, Address entry, TaskMonitor monitor)
+      throws CancelledException {
     try {
-      // SDK Image::ImageSize is the first target word; header size is 64 for
-      // all selected SDKs. Stay inside this image and the initialized block.
-      long size = memory.getLong(start);
-      if (size < 64 || size % 16 != 0 || size > block.getEnd().subtract(start) + 1) {
-        return null;
-      }
-      var end = start.add(size);
-      for (var address = start.add(64); address.compareTo(end) < 0; address = address.add(4)) {
-        monitor.checkCancelled();
-        var first = decoder.disassemble(address);
-        if (first == null || !Long.valueOf(layout.code()).equals(
-            DartRuntimeCalls.threadLoad(program, List.of(first), "x24"))) {
-          continue;
-        }
-        var body = new ArrayList<Instruction>();
-        var cursor = first;
-        for (int i = 0; i < 256 && cursor != null
-            && cursor.getMaxAddress().compareTo(end) < 0; i++) {
-          body.add(cursor);
-          var flow = cursor.getFlowType();
-          if (flow.isTerminal()) {
-            break;
-          }
-          if (flow.isJump()) {
-            break;
-          }
-          cursor = decoder.disassemble(cursor.getAddress().add(cursor.getLength()));
-        }
-        if (!DartRuntimeCalls.isRuntimeBody(program, body)) {
-          continue;
-        }
-        if (!candidate.isEmpty()) {
-          log.appendMsg("Dart ABI", "Ambiguous VM RuntimeStub bodies; no function created.");
+      var decoder = new ghidra.app.util.PseudoDisassembler(program);
+      var first = decoder.disassemble(entry);
+      if (mnemonic(first, "ldp")) {
+        Address slow = allocationSlowPath(program, entry, decoder, monitor);
+        if (slow == null) {
           return null;
         }
-        candidate = body;
+        Contract contract = sharedBody(program, slow, monitor);
+        return contract != null && contract.result() ? contract : null;
       }
-      if (candidate.isEmpty()) {
-        return null;
-      }
-      var range = new ghidra.program.model.address.AddressSet(
-          candidate.getFirst().getAddress(), candidate.getLast().getMaxAddress());
-      if (program.getFunctionManager().getFunctionsOverlapping(range).hasNext()
-          || program.getListing().getInstructions(range, true).hasNext()) {
-        return null;
-      }
-      var symbol = program.getSymbolTable().getPrimarySymbol(range.getMinAddress());
-      if (symbol != null && !symbol.getSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS)) {
-        return null;
-      }
-      // Only the official loader's undefined snapshot-array placeholder may
-      // be cleared. Real data definitions or user/importer types win conflicts.
-      var definitions = program.getListing().getDefinedData(range, true);
-      while (definitions.hasNext()) {
-        var data = definitions.next();
-        if (!data.getMinAddress().equals(start)
-            || !ghidra.program.model.data.Undefined.isUndefinedArray(data.getDataType())) {
-          return null;
-        }
-      }
-      var data = program.getListing().getDefinedDataContaining(range.getMinAddress());
-      if (data != null) {
-        if (!data.getMinAddress().equals(start)
-            || !ghidra.program.model.data.Undefined.isUndefinedArray(data.getDataType())) {
-          return null;
-        }
-        program.getListing().clearCodeUnits(data.getMinAddress(), data.getMaxAddress(), false, monitor);
-      }
-      var command = new ghidra.app.cmd.disassemble.DisassembleCommand(range.getMinAddress(), range, true);
-      command.enableCodeAnalysis(false);
-      if (!command.applyTo(program, monitor)) {
-        log.appendMsg("Dart ABI", command.getStatusMsg());
-        return null;
-      }
-      var function = program.getFunctionManager().createFunction("DartCallToRuntime",
-          range.getMinAddress(), range, SourceType.ANALYSIS);
-      log.appendMsg("Dart ABI", "Proved VM RuntimeStub discovered at " + range.getMinAddress() + ".");
-      return function;
-    } catch (ghidra.program.model.mem.MemoryAccessException
-        | ghidra.program.model.lang.InsufficientBytesException
+      return sharedBody(program, entry, monitor);
+    } catch (ghidra.program.model.lang.InsufficientBytesException
         | ghidra.program.model.lang.UnknownInstructionException
-        | ghidra.program.model.lang.UnknownContextException
-        | ghidra.program.model.address.AddressOutOfBoundsException
-        | ghidra.util.exception.InvalidInputException
-        | ghidra.program.database.function.OverlappingFunctionException e) {
-      log.appendMsg("Dart ABI", "RuntimeStub discovery rejected: " + e.getMessage());
+        | ghidra.program.model.lang.UnknownContextException | IndexOutOfBoundsException e) {
+      // A truncated prefix/body is unsupported; no contract is published.
       return null;
     }
   }
 
-  private static Long targetSlot(Program program, Function function, Instruction call) {
-    return DartRuntimeCalls.threadLoad(program,
-        DartRuntimeCalls.blockBefore(program, function.getBody(), call), "pc");
-  }
-
-  private static Layout layout(Program program) {
-    Layout result = null;
-    // Read loaded snapshot headers, not external b4a metadata or a filename.
-    // Both headers must select the same SDK facts if both are available.
-    for (String name : List.of("_kDartVmSnapshotData", "_kDartIsolateSnapshotData")) {
-      var symbols = program.getSymbolTable().getGlobalSymbols(name);
-      if (symbols.size() != 1) {
+  /**
+   * TryAllocate followed by GenerateSharedStub. Validate both paths, including
+   * the same THR top slot and tagged result. No class ID or Thread offset is
+   * assumed. The combined Mint model kills x1 as well as returning x0: the
+   * allocation fast path uses x1 even though the slow path restores it.
+   */
+  private static Address allocationSlowPath(Program program, Address entry,
+      ghidra.app.util.PseudoDisassembler decoder, TaskMonitor monitor)
+      throws ghidra.program.model.lang.InsufficientBytesException,
+             ghidra.program.model.lang.UnknownInstructionException,
+             ghidra.program.model.lang.UnknownContextException, CancelledException {
+    var code = new ArrayList<Instruction>();
+    var block = program.getMemory().getBlock(entry);
+    Address cursor = entry;
+    for (int count = 0; count < 20 && block != null && block.contains(cursor); count++) {
+      monitor.checkCancelled();
+      var instruction = decoder.disassemble(cursor);
+      if (instruction == null) {
         return null;
       }
-      Address start = symbols.getFirst().getAddress();
-      try {
-        var memory = program.getMemory();
-        if (memory.getInt(start) != 0xdcdcf5f5 || memory.getLong(start.add(4)) < 52
-            || memory.getLong(start.add(12)) != 3) {
+      code.add(instruction);
+      if (mnemonic(instruction, "ret")) {
+        break;
+      }
+      cursor = cursor.add(instruction.getLength());
+    }
+    if (code.size() < 9 || !returnsToLr(program, code.getLast())) {
+      return null;
+    }
+    var load = code.get(0);
+    if (!mnemonic(load, "ldp") || !registerOperand(load, 0, program, "x0")
+        || !registerOperand(load, 1, program, "x1")
+        || !program.getRegister("x26").equals(memoryBase(load, 2))) {
+      return null;
+    }
+    Long size = immediateArithmetic(program, code.get(1), "add", "x0");
+    if (size == null || size <= 0 || size % 8 != 0) {
+      return null;
+    }
+    var compare = code.get(2);
+    var branch = code.get(3);
+    Address slow = code.getLast().getAddress().add(4);
+    if (!mnemonic(compare, "cmp") || !registerOperand(compare, 0, program, "x1")
+        || !registerOperand(compare, 1, program, "x0") || !mnemonic(branch, "b.ls")
+        || branch.getFlows().length != 1 || !slow.equals(branch.getFlows()[0])
+        || !block.contains(slow)) {
+      return null;
+    }
+    var store = code.get(4);
+    if (!mnemonic(store, "str") || !registerOperand(store, 0, program, "x0")
+        || !program.getRegister("x26").equals(memoryBase(store, 1))
+        || !java.util.Objects.equals(displacement(load, 2), displacement(store, 1))
+        || !Long.valueOf(size - 1).equals(immediateArithmetic(program, code.get(5), "sub", "x0"))) {
+      return null;
+    }
+    for (var instruction : List.of(load, store)) {
+      if (writesRegister(instruction, program.getRegister("x26"))) {
+        return null;
+      }
+    }
+    int index = 6;
+    // Header construction can use one or several MOV/MOVK immediates; the
+    // particular tag word belongs to the object layout, not the ABI proof.
+    if (!mnemonic(code.get(index), "mov")) {
+      return null;
+    }
+    while (index < code.size()
+        && (mnemonic(code.get(index), "mov") || mnemonic(code.get(index), "movk"))) {
+      var instruction = code.get(index++);
+      if (!registerOperand(instruction, 0, program, "x1") || instruction.getOpObjects(1).length != 1
+          || !(instruction.getOpObjects(1)[0] instanceof Scalar)) {
+        return null;
+      }
+    }
+    var header = code.get(index++);
+    if (!mnemonic(header, "stur") || !registerOperand(header, 0, program, "x1")
+        || !program.getRegister("x0").equals(memoryBase(header, 1))
+        || !Long.valueOf(-1).equals(displacement(header, 1))) {
+      return null;
+    }
+    if (mnemonic(code.get(index), "dmb")) {
+      index++;
+    }
+    return index + 1 == code.size() ? slow : null;
+  }
+
+  private static Long immediateArithmetic(
+      Program program, Instruction instruction, String operation, String register) {
+    if (!mnemonic(instruction, operation) || !registerOperand(instruction, 0, program, register)
+        || !registerOperand(instruction, 1, program, register)
+        || instruction.getOpObjects(2).length != 1
+        || !(instruction.getOpObjects(2)[0] instanceof Scalar scalar)) {
+      return null;
+    }
+    return scalar.getSignedValue();
+  }
+
+  /** SDK large offsets and release stores materialize their address in TMP2. */
+  private static Register pointerStoreBase(
+      Program program, Instruction instruction, Register object) {
+    Register base = memoryBase(instruction, 1);
+    if (mnemonic(instruction, "stlr") && program.getRegister("x17").equals(base)) {
+      var address = instruction.getPrevious();
+      if (!contiguous(address, instruction) || hasIncoming(program, instruction)
+          || !mnemonic(address, "add") || !registerOperand(address, 0, program, "x17")
+          || !object.equals(address.getRegister(1)) || address.getOpObjects(2).length != 1
+          || !(address.getOpObjects(2)[0] instanceof Scalar)) {
+        return null;
+      }
+      return object;
+    }
+    if (base != null || !isStore(instruction)) {
+      return base;
+    }
+    var registers = new ArrayList<Register>();
+    for (var operand : instruction.getOpObjects(1)) {
+      if (operand instanceof Register register) {
+        registers.add(register);
+      }
+    }
+    return registers.size() == 2 && program.getRegister("x17").equals(registers.get(1))
+        ? registers.getFirst()
+        : null;
+  }
+
+  private static Contract sharedBody(Program program, Address entry, TaskMonitor monitor)
+      throws CancelledException {
+    var block = program.getMemory().getBlock(entry);
+    if (block == null || !block.isExecute() || !block.isInitialized()) {
+      return null;
+    }
+    var body = new ArrayList<Instruction>();
+    var decoder = new ghidra.app.util.PseudoDisassembler(program);
+    Address address = entry;
+    try {
+      for (int count = 0; count < 128 && block.contains(address); count++) {
+        monitor.checkCancelled();
+        var instruction = decoder.disassemble(address);
+        if (instruction == null
+            || instruction.getFlowType().isJump() && !mnemonic(instruction, "ret")) {
           return null;
         }
-        byte[] bytes = new byte[32];
-        memory.getBytes(start.add(20), bytes);
-        String hash = new String(bytes, StandardCharsets.US_ASCII);
-        var features = new StringBuilder();
-        boolean terminated = false;
-        long limit = Math.min(1024, memory.getLong(start.add(4)) + 4 - 52);
-        for (int i = 0; i < limit; i++) {
-          int b = Byte.toUnsignedInt(memory.getByte(start.add(52 + i)));
-          if (b == 0) {
-            terminated = true;
-            break;
-          }
-          if (b < 32 || b > 126) {
+        for (var op : instruction.getPcode()) {
+          if (op.getOpcode() == PcodeOp.CALLOTHER) {
             return null;
           }
-          features.append((char) b);
         }
-        if (!terminated) {
+        body.add(instruction);
+        if (instruction.getFlowType().isTerminal()) {
+          break;
+        }
+        address = address.add(instruction.getLength());
+      }
+    } catch (ghidra.program.model.lang.InsufficientBytesException
+        | ghidra.program.model.lang.UnknownInstructionException
+        | ghidra.program.model.lang.UnknownContextException e) {
+      return null;
+    }
+    if (body.isEmpty() || !returnsToLr(program, body.getLast())) {
+      return null;
+    }
+    int index = 0;
+    if (!stackSave(program, body.get(index++), List.of(program.getRegister("x30")), true)) {
+      return null;
+    }
+    var saves = new ArrayList<Save>();
+    var saved = new java.util.HashSet<Register>();
+    int bytes = 0;
+    while (index < body.size()) {
+      var instruction = body.get(index);
+      if (!mnemonic(instruction, "stp")) {
+        break;
+      }
+      var first = instruction.getRegister(0);
+      var second = instruction.getRegister(1);
+      if (first == null || second == null) {
+        return null;
+      }
+      var registers = List.of(first, second);
+      if (!stackSave(program, instruction, registers, true)) {
+        return null;
+      }
+      for (var register : registers) {
+        if (!saved.add(register)) {
           return null;
         }
-        Set<String> flags = Set.copyOf(List.of(features.toString().split(" +")));
-        if (!flags.containsAll(List.of("product", "arm64"))
-            || flags.contains("tsan") || flags.contains("msan") || flags.contains("asan")) {
-          return null;
-        }
-        Layout selected = null;
-        for (var candidate : LAYOUTS) {
-          if (candidate.hash().equals(hash) && flags.contains(candidate.os())
-              && flags.contains(candidate.pointers())
-              && !flags.contains(candidate.pointers().equals("compressed-pointers")
-                  ? "no-compressed-pointers" : "compressed-pointers")) {
-            selected = candidate;
+      }
+      int size = registers.stream().mapToInt(Register::getNumBytes).sum();
+      saves.add(new Save(registers, size));
+      bytes += size;
+      index++;
+    }
+    var expected = new java.util.HashSet<Register>();
+    for (int register : AVAILABLE) {
+      expected.add(program.getRegister("x" + register));
+    }
+    boolean fpu = saved.contains(program.getRegister("q0"));
+    if (fpu) {
+      for (int register = 0; register < 32; register ++) {
+        expected.add(program.getRegister("q" + register));
+      }
+    }
+    if (!saved.equals(expected) || body.size() - index < 12) {
+      return null;
+    }
+    if (DartRuntimeCalls.threadLoad(program, List.of(body.get(index++)), "x24") == null) {
+      return null;
+    }
+    var frame = List.of(program.getRegister("x29"), program.getRegister("x30"));
+    if (!stackSave(program, body.get(index++), frame, true)
+        || !DartRuntimeCalls.copy(program, body.get(index++), "x29", "x15")) {
+      return null;
+    }
+    boolean result = stackSave(program, body.get(index), List.of(program.getRegister("x22")), true);
+    if (result) {
+      index++;
+    }
+    if (DartRuntimeCalls.threadLoad(program, List.of(body.get(index++)), "x5") == null
+        || !zero(program, body.get(index++), "x4")) {
+      return null;
+    }
+    var load = body.get(index++);
+    var call = body.get(index++);
+    if (!call.getFlowType().isCall() || !call.getFlowType().isComputed()
+        || DartRuntimeCalls.threadLoad(program, List.of(load, call), "pc") == null) {
+      return null;
+    }
+    if (result) {
+      if (!stackSave(program, body.get(index++), List.of(program.getRegister("x0")), false)) {
+        return null;
+      }
+      var store = body.get(index++);
+      // Locate saved x0 from the actual prefix order. FP is 16 bytes below it.
+      int consumed = 0;
+      Long resultOffset = null;
+      for (var save : saves) {
+        consumed += save.bytes();
+        for (int i = 0; i < save.registers().size(); i++) {
+          if (save.registers().get(i).equals(program.getRegister("x0"))) {
+            resultOffset = (long) bytes - consumed + i * 8 + 16;
           }
         }
-        if (selected == null || result != null && !result.equals(selected)) {
-          return null;
-        }
-        result = selected;
-      } catch (ghidra.program.model.mem.MemoryAccessException
-          | ghidra.program.model.address.AddressOutOfBoundsException e) {
+      }
+      if (!mnemonic(store, "str") || !registerOperand(store, 0, program, "x0")
+          || !program.getRegister("x29").equals(memoryBase(store, 1))
+          || !java.util.Objects.equals(resultOffset, displacement(store, 1))) {
         return null;
       }
     }
-    return result;
+    if (!DartRuntimeCalls.copy(program, body.get(index++), "x15", "x29")
+        || !stackSave(program, body.get(index++), frame, false)) {
+      return null;
+    }
+    for (int i = saves.size() - 1; i >= 0; i--) {
+      if (index >= body.size()
+          || !stackSave(program, body.get(index++), saves.get(i).registers(), false)) {
+        return null;
+      }
+    }
+    if (index + 2 != body.size() || !stackChange(program, body.get(index++), 8)) {
+      return null;
+    }
+    return new Contract("__dart_" + (result ? "mint" : "guard") + (fpu ? "_fpu" : ""), List.of(),
+        result, false, fpu ? 32 : 0);
+  }
+
+  private static boolean writesRegister(Instruction instruction, Register register) {
+    for (var operation : instruction.getPcode()) {
+      var output = operation.getOutput();
+      if (output != null && output.getAddress().equals(register.getAddress())) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean returnsToLr(Program program, Instruction instruction) {
+    // The official decoder omits the implicit x30 operand of the usual RET.
+    return mnemonic(instruction, "ret")
+        && (instruction.getNumOperands() == 0 || registerOperand(instruction, 0, program, "x30"));
+  }
+
+  private static boolean mnemonic(Instruction instruction, String name) {
+    return instruction != null && instruction.getMnemonicString().equalsIgnoreCase(name);
+  }
+
+  private static boolean registerOperand(
+      Instruction instruction, int operand, Program program, String register) {
+    var actual = instruction == null ? null : instruction.getRegister(operand);
+    return actual != null
+        && actual.getBaseRegister().equals(program.getRegister(register).getBaseRegister());
+  }
+
+  private static boolean sameRegister(Instruction left, int a, Instruction right, int b) {
+    var register = memoryBase(left, a);
+    var other = memoryBase(right, b);
+    return register != null && other != null
+        && register.getBaseRegister().equals(other.getBaseRegister());
+  }
+
+  private static Register memoryBase(Instruction instruction, int operand) {
+    if (instruction == null || operand >= instruction.getNumOperands()) {
+      return null;
+    }
+    Register base = null;
+    for (var object : instruction.getOpObjects(operand)) {
+      if (object instanceof Register register) {
+        if (base != null) {
+          return null;
+        }
+        base = register;
+      }
+    }
+    return base;
+  }
+
+  private static Long displacement(Instruction instruction, int operand) {
+    if (instruction == null) {
+      return null;
+    }
+    Long value = 0L;
+    for (var object : instruction.getOpObjects(operand)) {
+      if (object instanceof Scalar scalar) {
+        value = scalar.getSignedValue();
+      }
+    }
+    return value;
+  }
+
+  private static Register tagBase(Instruction instruction) {
+    if (!mnemonic(instruction, "ldurb") && !mnemonic(instruction, "ldrb")) {
+      return null;
+    }
+    return Long.valueOf(-1).equals(displacement(instruction, 1)) ? memoryBase(instruction, 1)
+                                                                 : null;
+  }
+
+  private static boolean isStore(Instruction instruction) {
+    return mnemonic(instruction, "str") || mnemonic(instruction, "stur")
+        || mnemonic(instruction, "stlr");
+  }
+
+  private static boolean rightShift(Instruction instruction, Register register, long amount) {
+    if (instruction == null) {
+      return false;
+    }
+    for (var op : instruction.getPcode()) {
+      if (op.getOpcode() == PcodeOp.INT_RIGHT && op.getInput(0).isRegister()
+          && op.getInput(0).getAddress().equals(register.getAddress())
+          && op.getInput(1).isConstant() && op.getInput(1).getOffset() == amount) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean hasIncoming(Program program, Instruction instruction) {
+    var refs = program.getReferenceManager().getReferencesTo(instruction.getAddress());
+    while (refs.hasNext()) {
+      if (refs.next().getReferenceType().isFlow()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean zero(Program program, Instruction instruction, String register) {
+    var ops = instruction.getPcode();
+    return ops.length == 1 && ops[0].getOpcode() == PcodeOp.COPY
+        && ops[0].getOutput().getAddress().equals(program.getRegister(register).getAddress())
+        && ops[0].getInput(0).isConstant() && ops[0].getInput(0).getOffset() == 0;
+  }
+
+  private static boolean stackSave(
+      Program program, Instruction instruction, List<Register> registers, boolean push) {
+    if (instruction == null || registers.stream().anyMatch(java.util.Objects::isNull)) {
+      return false;
+    }
+    String name = registers.size() == 2 ? (push ? "stp" : "ldp") : (push ? "str" : "ldr");
+    if (!mnemonic(instruction, name)) {
+      return false;
+    }
+    int bytes = 0;
+    for (int i = 0; i < registers.size(); i++) {
+      if (!registers.get(i).equals(instruction.getRegister(i))) {
+        return false;
+      }
+      bytes += registers.get(i).getNumBytes();
+    }
+    if (!program.getRegister("x15").equals(memoryBase(instruction, registers.size()))) {
+      return false;
+    }
+    return stackChange(program, instruction, push ? -bytes : bytes, registers, push);
+  }
+
+  private static boolean contiguous(Instruction... instructions) {
+    for (int i = 0; i < instructions.length; i++) {
+      if (instructions[i] == null) {
+        return false;
+      }
+      if (i > 0 && !instructions[i].getAddress().equals(instructions[i - 1].getFallThrough())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Interpret only the instruction's constant VMSP writeback. The official
+   * p-code already distinguishes pre/post-index addressing and subregisters.
+   */
+  private static boolean stackChange(Program program, Instruction instruction, long expected) {
+    return mnemonic(instruction, "add") && registerOperand(instruction, 0, program, "x15")
+        && registerOperand(instruction, 1, program, "x15")
+        && stackChange(program, instruction, expected, List.of(), false);
+  }
+
+  private static boolean stackChange(Program program, Instruction instruction, long expected,
+      List<Register> registers, boolean push) {
+    if (instruction == null) {
+      return false;
+    }
+    var stack = program.getRegister("x15");
+    var values = new java.util.HashMap<ghidra.program.model.pcode.Varnode, Long>();
+    var root = new ghidra.program.model.pcode.Varnode(stack.getAddress(), 8);
+    values.put(root, 0L);
+    var sources =
+        new java.util
+            .HashMap<ghidra.program.model.pcode.Varnode, ghidra.program.model.pcode.Varnode>();
+    boolean written = false;
+    int accesses = 0;
+    long offset = push ? expected : 0;
+    for (var op : instruction.getPcode()) {
+      if (op.getOpcode() == PcodeOp.STORE || op.getOpcode() == PcodeOp.LOAD) {
+        if (accesses >= registers.size() || push != (op.getOpcode() == PcodeOp.STORE)
+            || !Long.valueOf(offset).equals(values.get(op.getInput(1)))) {
+          return false;
+        }
+        var register = registers.get(accesses++);
+        var data = push ? op.getInput(2) : op.getOutput();
+        if (data.getSize() != register.getNumBytes()) {
+          return false;
+        }
+        // STORE must save the named register, not an unrelated value. LOAD
+        // destinations may be decoder temporaries before their final COPY.
+        if (push && !sources.getOrDefault(data, data).getAddress().equals(register.getAddress())) {
+          return false;
+        }
+        offset += data.getSize();
+      }
+      var output = op.getOutput();
+      if (output == null) {
+        continue;
+      }
+      if (op.getOpcode() == PcodeOp.COPY) {
+        sources.put(output, sources.getOrDefault(op.getInput(0), op.getInput(0)));
+      } else {
+        sources.remove(output);
+      }
+      Long value = null;
+      if (op.getOpcode() == PcodeOp.COPY) {
+        value = constantOrOffset(values, op.getInput(0));
+      }
+      if (op.getOpcode() == PcodeOp.INT_ADD) {
+        Long base = constantOrOffset(values, op.getInput(0));
+        Long delta = constantOrOffset(values, op.getInput(1));
+        if (base != null && delta != null) {
+          value = base + delta;
+        }
+      }
+      values.put(output, value);
+      written |= output.equals(root);
+    }
+    return written && accesses == registers.size()
+        && Long.valueOf(expected).equals(values.get(root));
+  }
+
+  private static Long constantOrOffset(
+      java.util.Map<ghidra.program.model.pcode.Varnode, Long> values,
+      ghidra.program.model.pcode.Varnode node) {
+    return node.isConstant() ? Long.valueOf(node.getOffset()) : values.get(node);
   }
 }

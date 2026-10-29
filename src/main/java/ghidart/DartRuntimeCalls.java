@@ -742,7 +742,7 @@ final class DartRuntimeCalls {
     return Value.atom(node);
   }
 
-  private static boolean copy(Program program, Instruction instruction, String to, String from) {
+  static boolean copy(Program program, Instruction instruction, String to, String from) {
     if (instruction == null) {
       return false;
     }

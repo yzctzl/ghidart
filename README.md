@@ -10,7 +10,7 @@ Features:
 
 - Dart managed ABI: X15 stack, CPU/FPU/stack arguments, returns and register preservation.
 - Independent machine-code function discovery, control-flow analysis and call-chain argument/return recovery.
-- RuntimeEntry, write-barrier, stack-check and Mint helper contracts for verified SDKs.
+- RuntimeEntry, write-barrier, stack-check and Mint helper contracts recovered from supported machine-code patterns.
 - Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
 
 **Experimental: correctness and stability have not been comprehensively verified.**
@@ -50,9 +50,10 @@ prototypes are protected. Ghidart messages appear in the Ghidra Console.
 The Dart language uses register names such as `VMSP` and `THR`; physical names
 such as `x15` and `x26` remain aliases of the same registers for debugging.
 
-Exact SDK helper profiles have been verified for Android 3.10.8, iOS 2.19.6 and
-macOS 3.11.5. Other versions can still use the general managed ABI; special contracts
-apply only when identity, layout and instruction evidence match.
+L1 ABI analysis uses machine-code evidence, without snapshot hashes or Thread
+layout profiles. Supported stack-check and write-barrier call sites receive local
+contracts; direct shared helpers require matching saves, restores and result slots.
+Unresolved indirect destinations remain indirect. L2/L3 metadata can add stronger facts.
 
 ## Files and verification
 

@@ -73,10 +73,14 @@ public final class DartElfLoader extends ElfLoader {
     Map<String, ElfSymbol> symbols = new HashMap<>();
     for (var table : elf.getSymbolTables()) {
       for (var symbol : table.getSymbols()) {
+        String name = symbol.getNameAsString();
         if (symbol.getSectionHeaderIndex() != 0
-            && (SPLIT_SNAPSHOT.contains(symbol.getNameAsString())
-                || SINGLE_SNAPSHOT.contains(symbol.getNameAsString()))) {
-          symbols.put(symbol.getNameAsString(), symbol);
+            && (SPLIT_SNAPSHOT.contains(name) || SINGLE_SNAPSHOT.contains(name))
+            && elf.getProgramLoadHeaderContaining(symbol.getValue()) != null) {
+          ElfSymbol existing = symbols.putIfAbsent(name, symbol);
+          if (existing != null && existing.getValue() != symbol.getValue()) {
+            return false;
+          }
         }
       }
     }

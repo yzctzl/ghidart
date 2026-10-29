@@ -1,7 +1,7 @@
 /**
  * Select the Dart ARM64 language for recognized AOT ELF images.
  *
- * Detection checks the four snapshot symbols and data magic through ELF load
+ * Detection checks the snapshot symbols and data magic through ELF load
  * segments, since a symbol value is a virtual address rather than a file offset.
  * Mapping, relocation and ordinary ELF behavior stay in Ghidra's ElfLoader.
  * This loader neither parses Dart objects nor discovers function boundaries;
@@ -27,9 +27,11 @@ import java.util.Map;
 
 /** Selects the Dart language; all ELF loading stays in Ghidra's ELF loader. */
 public final class DartElfLoader extends ElfLoader {
-  private static final List<String> SNAPSHOT_SYMBOLS = List.of(
+  private static final List<String> SPLIT_SNAPSHOT = List.of(
       "_kDartVmSnapshotInstructions", "_kDartVmSnapshotData",
       "_kDartIsolateSnapshotInstructions", "_kDartIsolateSnapshotData");
+  private static final List<String> SINGLE_SNAPSHOT = List.of(
+      "_kDartSnapshotText", "_kDartSnapshotData");
   private static final byte[] SNAPSHOT_MAGIC = {
       (byte) 0xf5, (byte) 0xf5, (byte) 0xdc, (byte) 0xdc
   };
@@ -71,12 +73,22 @@ public final class DartElfLoader extends ElfLoader {
     Map<String, ElfSymbol> symbols = new HashMap<>();
     for (var table : elf.getSymbolTables()) {
       for (var symbol : table.getSymbols()) {
-        if (SNAPSHOT_SYMBOLS.contains(symbol.getNameAsString())) {
+        if (symbol.getSectionHeaderIndex() != 0
+            && (SPLIT_SNAPSHOT.contains(symbol.getNameAsString())
+                || SINGLE_SNAPSHOT.contains(symbol.getNameAsString()))) {
           symbols.put(symbol.getNameAsString(), symbol);
         }
       }
     }
-    for (String name : SNAPSHOT_SYMBOLS) {
+    // SDKs export either two separate images or one combined image.
+    // Incomplete or mixed layouts do not establish a Dart snapshot.
+    boolean split = SPLIT_SNAPSHOT.stream().allMatch(symbols::containsKey);
+    boolean single = SINGLE_SNAPSHOT.stream().allMatch(symbols::containsKey);
+    if (split == single
+        || symbols.size() != (split ? SPLIT_SNAPSHOT.size() : SINGLE_SNAPSHOT.size())) {
+      return false;
+    }
+    for (String name : split ? SPLIT_SNAPSHOT : SINGLE_SNAPSHOT) {
       ElfSymbol symbol = symbols.get(name);
       if (symbol == null) {
         return false;

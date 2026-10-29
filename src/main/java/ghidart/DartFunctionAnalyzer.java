@@ -155,7 +155,8 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
   static void prepareInstructionSnapshots(Program program, AddressSetView region,
       TaskMonitor monitor) throws CancelledException {
     for (String name : List.of(
-        "_kDartVmSnapshotInstructions", "_kDartIsolateSnapshotInstructions")) {
+        "_kDartVmSnapshotInstructions", "_kDartIsolateSnapshotInstructions",
+        "_kDartSnapshotText")) {
       for (var symbol : program.getSymbolTable().getGlobalSymbols(name)) {
         monitor.checkCancelled();
         if (symbol.getSource() != SourceType.IMPORTED || !symbol.isPrimary()) continue;

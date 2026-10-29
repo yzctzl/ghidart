@@ -11,8 +11,8 @@ public class VerifyDartLanguage extends GhidraScript {
     }
     for (String name : new String[] {"x15", "sp", "x30", "x26", "x27"}) {
       var register = currentProgram.getRegister(name);
-      if (register == null || !name.equals(register.getName())) {
-        throw new IllegalStateException("Missing or renamed physical register: " + name);
+      if (register == null) {
+        throw new IllegalStateException("Missing physical register alias: " + name);
       }
     }
     for (String[] pair : new String[][] {
@@ -20,11 +20,11 @@ public class VerifyDartLanguage extends GhidraScript {
         {"x21", "GDT"}, {"x22", "NULL"}, {"x24", "CODE"}, {"x26", "THR"},
         {"x27", "PP"}, {"x28", "HBS"}, {"x29", "FP"}, {"x30", "LR"}}) {
       var physical = currentProgram.getRegister(pair[0]);
-      if (physical == null || !pair[0].equals(physical.getName())
+      if (physical == null || !pair[1].equals(physical.getName())
           || !physical.equals(currentProgram.getRegister(pair[1]))) {
         throw new IllegalStateException("Invalid register alias: " + pair[1]);
       }
     }
-    println("DART LANGUAGE PASSED: official decoder loaded; physical registers and aliases intact");
+    println("DART LANGUAGE PASSED: official decoder loaded; Dart names and physical aliases intact");
   }
 }

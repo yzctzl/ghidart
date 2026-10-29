@@ -80,6 +80,14 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
   public boolean added(
       Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
       throws CancelledException {
+    try (var output = new DartAnalysisLog(program, log)) {
+      return analyze(program, set, monitor, output.messages());
+    }
+  }
+
+  private boolean analyze(
+      Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
+      throws CancelledException {
     Optional<Path> metadataPath = findMetadata(program);
     if (metadataPath.isEmpty()) {
       log.appendMsg(

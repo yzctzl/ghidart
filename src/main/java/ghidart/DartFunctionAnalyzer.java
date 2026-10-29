@@ -86,6 +86,13 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
   @Override
   public boolean added(Program program, AddressSetView selection, TaskMonitor monitor,
       MessageLog log) throws CancelledException {
+    try (var output = new DartAnalysisLog(program, log)) {
+      return analyze(program, selection, monitor, output.messages());
+    }
+  }
+
+  private boolean analyze(Program program, AddressSetView selection, TaskMonitor monitor,
+      MessageLog log) throws CancelledException {
     AddressSet region = executableRegion(program, selection);
     AddressSet seeds = new AddressSet();
     if (!configuredEntries.isEmpty()) {

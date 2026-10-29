@@ -1,6 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Physical names stay canonical for debugger mapping. Dart roles are aliases
-     of the same registers, never a second register state. -->
+<!-- Dart roles are canonical names; physical names remain aliases of the same storage. -->
 <processor_spec>
   <properties>
     <property key="addressesDoNotAppearDirectlyInCode" value="true" />
@@ -24,17 +23,17 @@
   </volatile>
   <register_data>
     <!-- const Register ARGS_DESC_REG = R4;  // Arguments descriptor register. -->
-    <register name="x4" alias="ARGS" />
-    <register name="x15" alias="VMSP" />
-    <register name="x16" alias="TMP" />
-    <register name="x17" alias="TMP2" />
-    <register name="x21" alias="GDT" />
-    <register name="x22" alias="NULL" />
-    <register name="x24" alias="CODE" />
-    <register name="x26" alias="THR" />
-    <register name="x27" alias="PP" />
-    <register name="x28" alias="HBS" />
-    <register name="x29" alias="FP" />
-    <register name="x30" alias="LR" />
+    <register name="x4" rename="ARGS" alias="x4" />
+    <register name="x15" rename="VMSP" alias="x15" />
+    <register name="x16" rename="TMP" alias="x16" />
+    <register name="x17" rename="TMP2" alias="x17" />
+    <register name="x21" rename="GDT" alias="x21" />
+    <register name="x22" rename="NULL" alias="x22" />
+    <register name="x24" rename="CODE" alias="x24" />
+    <register name="x26" rename="THR" alias="x26" />
+    <register name="x27" rename="PP" alias="x27" />
+    <register name="x28" rename="HBS" alias="x28" />
+    <register name="x29" rename="FP" alias="x29" />
+    <register name="x30" rename="LR" alias="x30" />
   </register_data>
 </processor_spec>

@@ -67,6 +67,13 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
   @Override
   public boolean added(Program program, AddressSetView entries, TaskMonitor monitor, MessageLog log)
       throws CancelledException {
+    try (var output = new DartAnalysisLog(program, log)) {
+      return analyze(program, entries, monitor, output.messages());
+    }
+  }
+
+  private boolean analyze(Program program, AddressSetView entries, TaskMonitor monitor,
+      MessageLog log) throws CancelledException {
     var graph = new AcyclicCallGraphBuilder(program, entries, true).getDependencyGraph(monitor);
     var bottomUp = new ArrayList<Function>();
     while (!graph.isEmpty()) {

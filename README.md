@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 A Ghidra extension for Dart AOT, currently supporting ARM64.
 It reuses Ghidra's official ARM64 decoder and decompiler, preserving original
-instructions and physical register names.
+instructions and register storage.
 
 Features:
 
@@ -46,7 +46,9 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
 Machine-code discovery and ABI analysis are disabled by default to avoid scanning
 mixed native code or decompiling the entire input during import. Incomplete control
 flow is marked `Dart: incomplete CFG`. User-edited bodies, signatures and call-site
-prototypes are protected.
+prototypes are protected. Ghidart messages appear in the Ghidra Console.
+The Dart language uses register names such as `VMSP` and `THR`; physical names
+such as `x15` and `x26` remain aliases of the same registers for debugging.
 
 Exact SDK helper profiles have been verified for Android 3.10.8, iOS 2.19.6 and
 macOS 3.11.5. Other versions can still use the general managed ABI; special contracts

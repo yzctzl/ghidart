@@ -3,7 +3,7 @@
 [English](README.md) | 简体中文
 
 Dart AOT 的 Ghidra 扩展，目前支持 ARM64。
-复用 Ghidra 官方 ARM64 解码器和反编译器，保留原始指令及物理寄存器名。
+复用 Ghidra 官方 ARM64 解码器和反编译器，保留原始指令和寄存器存储。
 
 提供：
 
@@ -42,6 +42,8 @@ export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.2_PUBLIC
 
 机器码发现和 ABI 分析默认关闭，避免扫描混合的 native 代码或在导入时全量反编译。
 不完整控制流标记为 `Dart: incomplete CFG`；用户修改的范围、签名和调用点原型会被保护。
+ghidart 的消息显示在 Ghidra Console 中。Dart 语言使用 `VMSP`、`THR` 等寄存器名；
+物理名 `x15`、`x26` 等仍是同一寄存器的别名，供调试使用。
 
 精确 SDK helper 配置目前验证了 Android 3.10.8、iOS 2.19.6、macOS 3.11.5。
 其他版本仍可使用通用 managed ABI；特殊契约仅在身份、布局及指令证据匹配时应用。

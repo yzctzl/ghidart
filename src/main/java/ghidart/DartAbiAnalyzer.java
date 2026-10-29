@@ -143,6 +143,26 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
     }
     log.appendMsg(getName(), preparedThreadCalls + " THR runtime calls prepared.");
     log.appendMsg(getName(), runtimeCalls + " proved RuntimeEntry call sites recovered.");
+    // Reopen automatic prototypes so a corrected helper contract can remove
+    // stale inputs. Keep explicit void returns and imported or user contracts;
+    // clearing at ANALYSIS level would also erase those return facts.
+    for (Function function : bottomUp) {
+      monitor.checkCancelled();
+      boolean automatic = function.getSignatureSource() == SourceType.ANALYSIS
+          && !function.getReturnType().isEquivalent(ghidra.program.model.data.VoidDataType.dataType)
+          && function.getReturn().getSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS);
+      for (Parameter parameter : function.getParameters()) {
+        automatic &= parameter.getSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS);
+      }
+      if (automatic) {
+        function.setSignatureSource(SourceType.DEFAULT);
+        try {
+          function.setReturnType(ghidra.program.model.data.DataType.DEFAULT, SourceType.DEFAULT);
+        } catch (InvalidInputException e) {
+          throw new IllegalStateException(e);
+        }
+      }
+    }
     var nativeRecovery = new DecompilerParameterIdCmd(
         getName(), safeEntries, SourceType.DEFAULT, true, false, 20);
     if (!nativeRecovery.applyTo(program, monitor)) {

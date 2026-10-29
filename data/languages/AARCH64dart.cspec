@@ -28,9 +28,13 @@
   </data_organization>
   <global>
     <range space="ram" />
-    <!-- THR is ambient VM state, not a positional Dart parameter. Its value
-         is meaningful even when copied to memory, unlike an unused save slot. -->
+    <!-- Ambient VM state, not positional arguments or disposable save slots.
+         Global does not mean readonly: runtime transitions may reload these. -->
+    <register name="x21" />
+    <register name="x22" />
     <register name="x26" />
+    <register name="x27" />
+    <register name="x28" />
   </global>
   <stackpointer register="x15" space="ram" />
   <returnaddress>

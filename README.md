@@ -15,7 +15,7 @@ Features:
 - Optional parameter access shapes inferred from machine-code memory uses, without snapshot layouts.
 - PP-relative access and constant-use indexing, with references for proved concrete addresses and calls.
 - Finite indirect-jump recovery through native switch/SSA analysis and complete CFG checks.
-- Optional native heap-base expression names.
+- Optional native heap-base expression names and explicit-length character data types.
 - Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
 
 **Experimental: correctness and stability have not been comprehensively verified.**
@@ -77,6 +77,17 @@ Rerun the analysis after changing code or signatures. It is disabled by default.
 intermediates as `heap_base`. Their arithmetic remains visible; instructions,
 registers and call contracts are unchanged. Reanalysis removes unchanged generated
 names and preserves user edits. The option is disabled by default.
+
+When a character payload's address, byte length and encoding are independently
+known, apply built-in `dart_chars8` (Latin-1) or `dart_chars16le` (UTF-16LE) to that
+range through the Data Type Manager. These types preserve NULs and UTF-16 code
+units in the database/Listing; edit raw UTF-16 units in Bytes. They do not discover
+Dart objects or infer lengths/encodings. The stock decompiler still uses C-string
+rules when inlining a character pointer: embedded NUL content is not fully inlined.
+Run **ShowDartCharacters.java** on typed data or an instruction referencing it to
+print the full payload, address, byte length and escaped code units in the console.
+This view preserves NULs and lone surrogates without changing decompiler semantics.
+Automatic Dart string discovery is not implemented; it requires object facts from L2/L3.
 
 Supported stack-check and write-barrier call sites receive local
 contracts; direct shared helpers require matching saves, restores and result slots.

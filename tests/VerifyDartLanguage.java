@@ -25,6 +25,6 @@ public class VerifyDartLanguage extends GhidraScript {
         throw new IllegalStateException("Invalid register alias: " + pair[1]);
       }
     }
-    println("DART LANGUAGE PASSED: official decoder loaded; Dart names and physical aliases intact");
+    println("DART LANGUAGE PASSED: ARM64 decoder loaded; Dart names and physical aliases intact");
   }
 }

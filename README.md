@@ -3,7 +3,7 @@
 English | [简体中文](README.zh-CN.md)
 
 A Ghidra extension for Dart AOT, currently supporting ARM64.
-It reuses Ghidra's official ARM64 decoder and decompiler, preserving original
+It reuses Ghidra's official ARM64 sources and decompiler, preserving original
 instructions and register storage.
 
 Features:
@@ -11,6 +11,8 @@ Features:
 - Dart managed ABI: X15 stack, CPU/FPU/stack arguments, returns and register preservation.
 - Independent machine-code function discovery, control-flow analysis and call-chain argument/return recovery.
 - RuntimeEntry, write-barrier, stack-check and Mint helper contracts recovered from supported machine-code patterns.
+- Clearer compressed Smi extraction using standard sign-extension operations.
+- Optional parameter access shapes inferred from machine-code memory uses, without snapshot layouts.
 - Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
 
 **Experimental: correctness and stability have not been comprehensively verified.**
@@ -51,14 +53,23 @@ The Dart language uses register names such as `VMSP` and `THR`; physical names
 such as `x15` and `x26` remain aliases of the same registers for debugging.
 
 L1 ABI analysis uses machine-code evidence, without snapshot hashes or Thread
-layout profiles. Supported stack-check and write-barrier call sites receive local
+layout profiles. **Dart ABI → Infer observed memory shapes** can additionally
+replace raw parameter-relative field accesses with observed offset members.
+It is disabled by default, requires a recovered physical prototype and rejects
+mixed numeric uses or escapes. These types describe observed accesses, not Dart
+classes or complete objects. Reanalysis revokes unchanged generated hints;
+edited layouts are preserved as user prototypes.
+
+Supported stack-check and write-barrier call sites receive local
 contracts; direct shared helpers require matching saves, restores and result slots.
 Unresolved indirect destinations remain indirect. L2/L3 metadata can add stronger facts.
 
 ## Files and verification
 
 Sources are in `src/main/java/ghidart/`; language definitions are in `data/languages/`.
-The build copies the official decoder, avoiding a separately maintained ARM64 instruction set.
+The build references the installed official ARM64 sources through Ghidra's module
+macro. A small SLEIGH wrapper exposes equivalent signed-word arithmetic; it keeps
+instruction encodings and register storage unchanged.
 See [B4A_INTERFACE.md](B4A_INTERFACE.md) for the b4a data format.
 
 The original lightweight verifiers are in `tests/`. Local application samples and

@@ -13,6 +13,7 @@
 package ghidart;
 
 import ghidra.app.cmd.function.DecompilerParameterIdCmd;
+import ghidra.framework.options.Options;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
@@ -45,6 +46,9 @@ import java.util.HashSet;
 
 /** Uses Ghidra's own call-graph recovery, without imported function signatures. */
 public final class DartAbiAnalyzer extends AbstractAnalyzer {
+  private static final String MEMORY_OPTION = "Infer observed memory shapes";
+  private boolean inferMemoryShapes;
+
   public DartAbiAnalyzer() {
     super("Dart ABI", "Recover managed arguments and results in the selected call graph.",
         AnalyzerType.FUNCTION_ANALYZER);
@@ -62,6 +66,18 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
     // A whole AOT image can contain hundreds of thousands of functions. Keep
     // whole-program decompilation explicit while the ABI is being validated.
     return false;
+  }
+
+  @Override
+  public void registerOptions(Options options, Program program) {
+    options.registerOption(MEMORY_OPTION, false, null,
+        "Infer access shapes for recovered parameters used only as memory addresses. "
+            + "These are observed offsets, not Dart class layouts.");
+  }
+
+  @Override
+  public void optionsChanged(Options options, Program program) {
+    inferMemoryShapes = options.getBoolean(MEMORY_OPTION, false);
   }
 
   @Override
@@ -85,6 +101,14 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
         bottomUp.add(function);
       }
     }
+    // Discard only unchanged hints owned by the optional memory-shape pass.
+    // This also revokes stale hints when the option is subsequently disabled.
+    var unreadableTypes = new HashSet<Address>();
+    for (var function : bottomUp) {
+      if (!DartMemoryShapes.restore(program, function, log)) {
+        unreadableTypes.add(function.getEntryPoint());
+      }
+    }
     // An unresolved successor makes return/parameter inference incomplete.
     // Keep its conservative ABI and warning instead of publishing a precise
     // signature inferred only from the visible subset of paths.
@@ -93,6 +117,11 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
     var iterator = bottomUp.iterator();
     while (iterator.hasNext()) {
       Function function = iterator.next();
+      if (unreadableTypes.contains(function.getEntryPoint())) {
+        safeEntries.delete(function.getEntryPoint(), function.getEntryPoint());
+        iterator.remove();
+        continue;
+      }
       if (incomplete(function)) {
         safeEntries.delete(function.getEntryPoint(), function.getEntryPoint());
         iterator.remove();
@@ -100,6 +129,7 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
       }
     }
     log.appendMsg(getName(), incomplete + " incomplete CFGs left without inferred signatures.");
+    if (bottomUp.isEmpty() && !unreadableTypes.isEmpty()) return true;
     // Machine-only helper contracts: no snapshot identity or Thread layout.
     int helpers = DartThreadCalls.recoverContracts(program, bottomUp, monitor, log);
     log.appendMsg(getName(), helpers + " SDK helper call contracts recovered.");
@@ -164,6 +194,11 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
           log.appendMsg(getName(), "Return contract rejected at " + entry + ": " + e.getMessage());
         }
       }
+    }
+    if (inferMemoryShapes) {
+      int shapes = DartMemoryShapes.recover(program, bottomUp, monitor, log);
+      log.appendMsg(getName(), shapes + " observed parameter memory shapes recovered; "
+          + "these are access types, not Dart classes.");
     }
     log.appendMsg(getName(), "Native parameter recovery completed; " + recovered
         + " managed return contracts recovered. User/imported signatures were preserved.");

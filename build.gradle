@@ -13,8 +13,8 @@ tasks.named('processResources') {
     exclude 'META-INF/plugin.xml', 'META-INF/pluginIcon.svg', 'images/README.txt'
 }
 
-// ghidart changes Dart semantics, not the AArch64 instruction decoder. Keep the
-// decoder in lockstep with the Ghidra installation used to build the extension.
+// Reuse the installed ARM64 definitions and metadata. Only a small transparent
+// arithmetic specialization below is maintained by ghidart.
 def languageDir = file('data/languages')
 def manualDir = file('data/manuals')
 def officialAarch64Dir = new File(
@@ -23,31 +23,54 @@ def officialAarch64ManualDir = new File(
     ghidraInstallDir, 'Ghidra/Processors/AARCH64/data/manuals')
 def prepareAarch64Language = tasks.register('prepareAarch64Language') {
     group = 'build'
-    description = 'Stage the official Ghidra AArch64 decoder for the Dart language.'
+    description = 'Stage the official ARM64 register mappings and manual index.'
 
-    def sla = new File(officialAarch64Dir, 'AARCH64.sla')
     def dwarf = new File(officialAarch64Dir, 'AARCH64.dwarf')
     def manualIndex = new File(officialAarch64ManualDir, 'AARCH64.idx')
-    inputs.files(sla, dwarf, manualIndex)
+    inputs.files(dwarf, manualIndex)
     outputs.files(
-        new File(languageDir, 'AARCH64.sla'),
         new File(languageDir, 'AARCH64.dwarf'),
         new File(manualDir, 'AARCH64.idx'))
 
     doLast {
-        [sla, dwarf, manualIndex].each { input ->
+        [dwarf, manualIndex].each { input ->
             if (!input.isFile()) {
                 throw new GradleException("Missing official AArch64 language file: ${input}")
             }
         }
         copy {
-            from sla, dwarf
+            from dwarf
             into languageDir
         }
         copy {
             from manualIndex
             into manualDir
         }
+    }
+}
+
+// The official module macro keeps both builds and user-directory installations
+// independent of checkout paths; no official source files are copied or patched.
+def compileDartLanguage = tasks.register('compileDartLanguage', Exec) {
+    group = 'build'
+    description = 'Compile the Dart wrapper over the installed official ARM64 sources.'
+    def wrapper = new File(languageDir, 'AARCH64dart.slaspec')
+    def argumentsFile = file('data/sleighArgs.txt')
+    inputs.files(wrapper, argumentsFile, new File(ghidraInstallDir, 'Ghidra/application.properties'))
+    inputs.files(fileTree(officialAarch64Dir) { include '*.sinc' })
+    outputs.file(new File(languageDir, 'AARCH64dart.sla'))
+    outputs.file(layout.buildDirectory.file('tmp/sleighArgs.txt'))
+    doFirst {
+        // Ghidra's development launcher reads the same options under build/tmp.
+        copy {
+            from argumentsFile
+            into layout.buildDirectory.dir('tmp')
+        }
+        def windows = System.getProperty('os.name').toLowerCase().startsWith('windows')
+        def launcher = new File(ghidraInstallDir, windows ? 'support/sleigh.bat' : 'support/sleigh')
+        def arguments = [launcher.absolutePath, '-i', argumentsFile.absolutePath,
+            wrapper.absolutePath, new File(languageDir, 'AARCH64dart.sla').absolutePath]
+        commandLine(windows ? ['cmd', '/c'] + arguments : arguments)
     }
 }
 
@@ -82,8 +105,8 @@ tasks.register('verifySamples', JavaExec) {
 
 tasks.named('buildExtension') {
     includeEmptyDirs = false
-    dependsOn verifySources, prepareAarch64Language
-    exclude 'samples/**', 'tools/**', 'tests/**', 'local/**', 'ghidra_scripts/b4a/**', '.git/**', '.gitignore', '.vscode/**',
+    dependsOn verifySources, prepareAarch64Language, compileDartLanguage
+    exclude 'data/languages/AARCH64.sla', 'samples/**', 'tools/**', 'tests/**', 'local/**', 'ghidra_scripts/b4a/**', '.git/**', '.gitignore', '.vscode/**',
         'gradle.properties', 'ghidart-OLD/**'
     // Exclude the local Ghidra distribution.
     exclude { it.relativePath.segments[0].matches('ghidra_[0-9].*') }

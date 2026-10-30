@@ -1,0 +1,16 @@
+@define DATA_ENDIAN "little"
+# Resolve the official processor module independently of extension location.
+@include "$(AARCH64)/data/languages/AARCH64instructions.sinc"
+
+# SBFX xD, xN, #1, #31 ignores the upper word. Express its identical
+# arithmetic as sign-extension of the low word followed by arithmetic shift.
+# This exposes signed 32-bit uses without an opaque userop or Dart layout.
+:sbfx Rd_GPR64, Rn_GPR64, ImmRConst64, BFextractWidth64
+is ImmS_ImmR_TestSet=1 & ImmS_EQ_ImmR=0 & ImmS_LT_ImmR=0
+ & sf=1 & opc=0 & b_2428=0x13 & b_2323=0 & n=1
+ & ImmR=1 & ImmS=31 & ImmRConst64 & BFextractWidth64 & Rn_GPR64 & Rd_GPR64
+{
+ low:4 = Rn_GPR64:4;
+ extended:8 = sext(low);
+ Rd_GPR64 = extended s>> 1;
+}

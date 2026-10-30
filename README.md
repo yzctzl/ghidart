@@ -14,6 +14,7 @@ Features:
 - Clearer compressed Smi extraction using standard sign-extension operations.
 - Optional parameter access shapes inferred from machine-code memory uses, without snapshot layouts.
 - PP-relative access and constant-use indexing, with references for proved concrete addresses and calls.
+- Finite indirect-jump recovery through native switch/SSA analysis and complete CFG checks.
 - Optional native heap-base expression names.
 - Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
 

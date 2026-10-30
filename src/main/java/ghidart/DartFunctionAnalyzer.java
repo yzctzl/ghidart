@@ -40,6 +40,7 @@ import java.util.List;
 /** Opt-in CFG recovery; existing function definitions remain user-controlled. */
 public final class DartFunctionAnalyzer extends AbstractAnalyzer {
   public static final String INCOMPLETE_TAG = "Dart: incomplete CFG";
+  private static final String JUMPS = "ghidart.L1.jumps.v1";
   private static final int OUTSIDE = 1;
   private static final int OWNERSHIP = 2;
   private static final int UNDECODABLE = 4;
@@ -127,6 +128,7 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
       throw new IllegalArgumentException("Dart ARM64 language required");
     }
     AddressSet region = executableRegion(program, selectedRegion);
+    clearJumpReferences(program, region, monitor);
     prepareInstructionSnapshots(program, region, monitor);
     var discovery = new Discovery(program, region, monitor);
     AddressSet callbackBodies = new AddressSet();
@@ -151,6 +153,29 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
       discovery.run(log);
     } finally {
       if (discovery.switchDecompiler != null) discovery.switchDecompiler.dispose();
+    }
+  }
+
+  /** Revoke only our previous analysis edges, before they can influence SSA. */
+  private static void clearJumpReferences(Program program, AddressSetView region,
+      TaskMonitor monitor) throws CancelledException {
+    var property = program.getUsrPropertyManager().getStringPropertyMap(JUMPS);
+    if (property == null) return;
+    var sites = property.getPropertyIterator(region);
+    while (sites.hasNext()) {
+      monitor.checkCancelled();
+      Address site = sites.next();
+      for (String text : property.getString(site).split(";")) {
+        Address target = program.getAddressFactory().getAddress(text);
+        if (target == null) continue;
+        var reference = program.getReferenceManager().getReference(site, target, -1);
+        if (reference != null && reference.getSource() == SourceType.ANALYSIS
+            && reference.getReferenceType()
+                == ghidra.program.model.symbol.RefType.COMPUTED_JUMP) {
+          program.getReferenceManager().delete(reference);
+        }
+      }
+      property.remove(site);
     }
   }
 
@@ -695,6 +720,9 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
         switchDecompiler = new ghidra.app.decompiler.DecompInterface();
         new ghidra.app.plugin.core.analysis.SwitchAnalysisDecompileConfigurer(program)
             .configure(switchDecompiler);
+        // The official switch pass requests tables only. Finite SSA choices
+        // additionally need its syntax tree; retain the same analysis options.
+        switchDecompiler.toggleSyntaxTree(true);
         if (!switchDecompiler.openProgram(program)) {
           switchNanos = Long.MAX_VALUE;
           return trace;
@@ -710,12 +738,22 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
         return trace;
       }
       boolean changed = false;
+      var jumps = new LinkedHashMap<Address, java.util.Set<Address>>();
       for (var table : result.getHighFunction().getJumpTables()) {
-        Address branch = table.getSwitchAddress();
         Address[] targets = table.getCases();
-        if (!trace.body().contains(branch) || targets == null || targets.length == 0) {
-          continue;
+        if (targets != null && targets.length != 0) {
+          jumps.put(table.getSwitchAddress(), new LinkedHashSet<>(List.of(targets)));
         }
+      }
+      // Constant address selections need not form a table. Reuse the same SSA
+      // evaluator as the value-use index; unknown PHI inputs reject the entire
+      // set. No pool bytes, instruction patterns or partial target guesses.
+      DartValueAnalyzer.jumpTargets(program, candidate, result.getHighFunction(), monitor)
+          .forEach(jumps::putIfAbsent);
+      for (var jump : jumps.entrySet()) {
+        Address branch = jump.getKey();
+        var targets = jump.getValue();
+        if (!trace.body().contains(branch) || targets.isEmpty()) continue;
         AddressSet destinations = new AddressSet();
         boolean valid = true;
         for (Address target : targets) {
@@ -725,13 +763,10 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
           valid &= owner == null || owner.getEntryPoint().equals(entry);
           destinations.add(target);
         }
-        var references = program.getReferenceManager().getFlowReferencesFrom(branch);
-        for (var reference : references) {
+        for (var reference : program.getReferenceManager().getFlowReferencesFrom(branch)) {
           valid &= destinations.contains(reference.getToAddress());
         }
-        if (!valid) {
-          continue;
-        }
+        if (!valid) continue;
         var decode = new DisassembleCommand(destinations, region, true);
         decode.enableCodeAnalysis(false);
         decode.applyTo(program, monitor);
@@ -739,14 +774,42 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
         for (Address target : targets) {
           valid &= program.getListing().getInstructionAt(target) != null;
         }
-        if (!valid) {
-          continue;
-        }
+        if (!valid) continue;
+        var references = program.getReferenceManager();
+        var added = new java.util.ArrayList<ghidra.program.model.symbol.Reference>();
         for (Address target : targets) {
-          program.getReferenceManager().addMemoryReference(branch, target,
-              ghidra.program.model.symbol.RefType.COMPUTED_JUMP, SourceType.ANALYSIS, -1);
+          // Do not claim or remove an existing user/loader flow fact.
+          if (references.getReference(branch, target, -1) == null) {
+            added.add(references.addMemoryReference(branch, target,
+                ghidra.program.model.symbol.RefType.COMPUTED_JUMP, SourceType.ANALYSIS, -1));
+          }
         }
         switchBranches.add(branch);
+        boolean accepted = false;
+        try {
+          // An SSA target is not a function-boundary proof. Admit it only when
+          // the expanded CFG satisfies complete ownership checks.
+          boolean complete = trace(entry).complete();
+          if (complete && !added.isEmpty()) {
+            var property = program.getUsrPropertyManager().getStringPropertyMap(JUMPS);
+            if (property == null) {
+              try {
+                property = program.getUsrPropertyManager().createStringPropertyMap(JUMPS);
+              } catch (ghidra.util.exception.DuplicateNameException e) {
+                throw new IllegalStateException(e);
+              }
+            }
+            property.add(branch, String.join(";",
+                added.stream().map(r -> r.getToAddress().toString()).toList()));
+          }
+          accepted = complete;
+        } finally {
+          if (!accepted) {
+            for (var reference : added) references.delete(reference);
+            switchBranches.delete(branch, branch);
+          }
+        }
+        if (!accepted) continue;
         recoveredSwitches++;
         changed = true;
       }

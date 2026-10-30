@@ -13,6 +13,8 @@ Features:
 - RuntimeEntry, write-barrier, stack-check and Mint helper contracts recovered from supported machine-code patterns.
 - Clearer compressed Smi extraction using standard sign-extension operations.
 - Optional parameter access shapes inferred from machine-code memory uses, without snapshot layouts.
+- PP-relative access and constant-use indexing, with references for proved concrete addresses and calls.
+- Optional native heap-base expression names.
 - Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
 
 **Experimental: correctness and stability have not been comprehensively verified.**
@@ -59,6 +61,21 @@ It is disabled by default, requires a recovered physical prototype and rejects
 mixed numeric uses or escapes. These types describe observed accesses, not Dart
 classes or complete objects. Reanalysis revokes unchanged generated hints;
 edited layouts are preserved as user prototypes.
+
+After ABI recovery, optionally run **Dart Value Uses** on selected functions.
+It decompiles each selected function, so a whole-program run can take a long time.
+The task monitor shows the current function, stage and completed count. The
+per-function decompiler timeout defaults to 20 seconds and is configurable;
+the final summary includes failures and timeouts.
+It saves PP origins, byte offsets, access widths and constant uses in the database.
+Run `ShowDartValueUses.java` to print them in the Console. Concrete references appear
+in normal Ghidra navigation; PP offsets alone do not identify pool entries or strings.
+Rerun the analysis after changing code or signatures. It is disabled by default.
+
+**Dart Value Uses → Name heap-base expressions** optionally names exact `HBS << 32`
+intermediates as `heap_base`. Their arithmetic remains visible; instructions,
+registers and call contracts are unchanged. Reanalysis removes unchanged generated
+names and preserves user edits. The option is disabled by default.
 
 Supported stack-check and write-barrier call sites receive local
 contracts; direct shared helpers require matching saves, restores and result slots.

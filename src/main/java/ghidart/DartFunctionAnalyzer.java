@@ -846,18 +846,14 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
     private Address checkedEntry(Address entry) {
       var range = region.getRangeContaining(entry);
       if (range == null || entry.subtract(range.getMinAddress()) < 8
-          || range.getMaxAddress().subtract(entry) < 19) {
+          || range.getMaxAddress().subtract(entry) < 15) {
         return null;
       }
       var listing = program.getListing();
       var loadMiss = listing.getInstructionAt(entry.subtract(8));
       var miss = listing.getInstructionAt(entry.subtract(4));
       var header = listing.getInstructionAt(entry);
-      var cid = listing.getInstructionAt(entry.add(4));
-      var compare = listing.getInstructionAt(entry.add(8));
-      var branch = listing.getInstructionAt(entry.add(12));
-      if (loadMiss == null || miss == null || header == null || cid == null
-          || compare == null || branch == null) {
+      if (loadMiss == null || miss == null || header == null) {
         return null;
       }
       if (!miss.getMnemonicString().equalsIgnoreCase("br") || !register(miss, 0, "x16")
@@ -865,7 +861,7 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
         return null;
       }
       boolean receiver = false;
-      boolean tag = false;
+      long displacement = 0;
       for (Object object : header.getOpObjects(1)) {
         if (object instanceof ghidra.program.model.lang.Register value) {
           if (!value.getBaseRegister().equals(program.getRegister("x0"))) {
@@ -873,15 +869,34 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
           }
           receiver = true;
         } else if (object instanceof ghidra.program.model.scalar.Scalar value) {
-          tag = value.getSignedValue() == -1;
+          displacement = value.getSignedValue();
         }
       }
-      if (!header.getMnemonicString().equalsIgnoreCase("ldur")
-          || !register(header, 0, "x16") || !receiver || !tag
-          || !cid.getMnemonicString().equalsIgnoreCase("ubfx")
-          || !register(cid, 0, "x16") || !register(cid, 1, "x16")
-          || cid.getScalar(2) == null || cid.getScalar(2).getUnsignedValue() != 12
-          || cid.getScalar(3) == null || cid.getScalar(3).getUnsignedValue() != 20
+      if (!receiver || !register(header, 0, "x16")) {
+        return null;
+      }
+
+      // Older LoadClassId reads the 16-bit CID directly. Newer code extracts
+      // 20 bits from the header. Both compare the tagged CID with x5 and
+      // branch to the same proved THR miss trampoline.
+      int compareOffset = 4;
+      if (!(header.getMnemonicString().equalsIgnoreCase("ldurh") && displacement == 1)) {
+        if (!header.getMnemonicString().equalsIgnoreCase("ldur") || displacement != -1
+            || range.getMaxAddress().subtract(entry) < 19) {
+          return null;
+        }
+        var cid = listing.getInstructionAt(entry.add(4));
+        if (cid == null || !cid.getMnemonicString().equalsIgnoreCase("ubfx")
+            || !register(cid, 0, "x16") || !register(cid, 1, "x16")
+            || cid.getScalar(2) == null || cid.getScalar(2).getUnsignedValue() != 12
+            || cid.getScalar(3) == null || cid.getScalar(3).getUnsignedValue() != 20) {
+          return null;
+        }
+        compareOffset = 8;
+      }
+      var compare = listing.getInstructionAt(entry.add(compareOffset));
+      var branch = listing.getInstructionAt(entry.add(compareOffset + 4));
+      if (compare == null || branch == null
           || !compare.getMnemonicString().equalsIgnoreCase("cmp")
           || !register(compare, 0, "x5") || !register(compare, 1, "x16")
           || !branch.getMnemonicString().equalsIgnoreCase("b.ne")
@@ -889,7 +904,6 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
           || !branch.getFlows()[0].equals(entry.subtract(8))) {
         return null;
       }
-      // The CID is tagged for comparison with the Smi cache key in x5.
       boolean tagged = false;
       for (Object object : compare.getOpObjects(1)) {
         if (object instanceof ghidra.program.model.scalar.Scalar value) {
@@ -897,10 +911,10 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
         }
       }
       try {
-        // The shifted-register operand is composite in Ghidra (getRegister
-        // and getScalar return null). ARM64 shift bits distinguish LSL/LSR.
+        // The composite shifted operand has no getRegister/getScalar result.
+        // Check the encoded shift kind as well as the observed shift amount.
         return tagged && (program.getMemory().getInt(compare.getAddress()) & 0x00c00000) == 0
-            ? entry.add(16) : null;
+            ? entry.add(compareOffset + 8) : null;
       } catch (MemoryAccessException e) {
         return null;
       }
@@ -1285,7 +1299,8 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
           // supplies all subsequent control-flow and instruction semantics.
           afterTerminal |= (word & 0xfffffc1f) == 0xd65f0000
               || (word & 0xffe0001f) == 0xd4200000 || (word & 0xfc000000) == 0x14000000
-              || (word & 0xfffffc1f) == 0xd61f0000;
+              || (word & 0xfffffc1f) == 0xd61f0000
+              || (word & 0xff00001e) == 0x5400000e;
         }
         offset += step;
       }

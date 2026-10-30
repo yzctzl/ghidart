@@ -14,3 +14,12 @@ is ImmS_ImmR_TestSet=1 & ImmS_EQ_ImmR=0 & ImmS_LT_ImmR=0
  extended:8 = sext(low);
  Rd_GPR64 = extended s>> 1;
 }
+
+# ARM64 AL always branches. The official generic condition constructor emits
+# CBRANCH true and exposes a false fallthrough to pre-decompiler CFG analysis.
+# Old Dart assemblers commonly use B.AL for ordinary unconditional branches.
+:"b.al" Addr19
+is ImmS_ImmR_TestSet=1 & b_2531=0x2a & o1=0 & Addr19 & o0=0 & br_cond_op=14
+{
+ goto Addr19;
+}

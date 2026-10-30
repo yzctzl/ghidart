@@ -7,13 +7,14 @@
               endian="little"
               size="64"
               variant="dart"
-              version="1.0"
+              version="1.1"
               slafile="AARCH64dart.sla"
               processorspec="AARCH64dart.pspec"
               manualindexfile="../manuals/AARCH64.idx"
               id="AARCH64:LE:64:dart">
         <description>Dart AOT ARM64 using Ghidra's official AArch64 sources</description>
         <compiler name="dart" spec="AARCH64dart.cspec" id="dart"/>
+        <compiler name="dart (separate x23 heap base, 2.13-era)" spec="AARCH64dart-r23.cspec" id="dart-r23"/>
         <external_name tool="DWARF.register.mapping.file" name="AARCH64.dwarf"/>
     </language>
 </language_definitions>

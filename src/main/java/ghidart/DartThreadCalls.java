@@ -279,7 +279,7 @@ final class DartThreadCalls {
 
   /**
    * StoreBarrier / ArrayStoreBarrier in assembler_arm64.cc.
-   * The tag-byte overlap test and HBS mask must guard this exact call. The
+   * The tag-byte overlap test and x28 mask must guard this exact call. The
    * preceding store identifies the object and distinguishes the array slot;
    * the displacement used to fetch the helper is deliberately irrelevant.
    */
@@ -341,7 +341,7 @@ final class DartThreadCalls {
       return null;
     }
     if (!mnemonic(test, "tst") || !sameRegister(test, 0, overlap, 0)
-        || !rightShift(test, program.getRegister("x28"), 32)) {
+        || !barrierMask(test, program.getRegister("x28"))) {
       return null;
     }
     Register base = pointerStoreBase(program, store, object);
@@ -514,29 +514,38 @@ final class DartThreadCalls {
       return null;
     }
     var load = code.get(0);
+    var advance = code.get(1);
+    // Older TryAllocate keeps x0 untagged until after the header store,
+    // advances top in x1 and uses TMP for the limit/header. Newer code
+    // advances x0 itself, then subtracts size - tag before initialization.
+    boolean untagged = registerOperand(advance, 0, program, "x1");
+    String limit = untagged ? "x16" : "x1";
+    String top = untagged ? "x1" : "x0";
+    String tags = untagged ? "x16" : "x1";
     if (!mnemonic(load, "ldp") || !registerOperand(load, 0, program, "x0")
-        || !registerOperand(load, 1, program, "x1")
-        || !program.getRegister("x26").equals(memoryBase(load, 2))) {
+        || !registerOperand(load, 1, program, limit)
+        || !program.getRegister("x26").equals(memoryBase(load, 2))
+        || !mnemonic(advance, "add") || !registerOperand(advance, 0, program, top)
+        || !registerOperand(advance, 1, program, "x0")
+        || advance.getOpObjects(2).length != 1
+        || !(advance.getOpObjects(2)[0] instanceof Scalar sizeValue)) {
       return null;
     }
-    Long size = immediateArithmetic(program, code.get(1), "add", "x0");
-    if (size == null || size <= 0 || size % 8 != 0) {
-      return null;
-    }
+    long size = sizeValue.getSignedValue();
+    if (size <= 0 || size % 8 != 0) return null;
     var compare = code.get(2);
     var branch = code.get(3);
     Address slow = code.getLast().getAddress().add(4);
-    if (!mnemonic(compare, "cmp") || !registerOperand(compare, 0, program, "x1")
-        || !registerOperand(compare, 1, program, "x0") || !mnemonic(branch, "b.ls")
+    if (!mnemonic(compare, "cmp") || !registerOperand(compare, 0, program, limit)
+        || !registerOperand(compare, 1, program, top) || !mnemonic(branch, "b.ls")
         || branch.getFlows().length != 1 || !slow.equals(branch.getFlows()[0])
         || !block.contains(slow)) {
       return null;
     }
     var store = code.get(4);
-    if (!mnemonic(store, "str") || !registerOperand(store, 0, program, "x0")
+    if (!mnemonic(store, "str") || !registerOperand(store, 0, program, top)
         || !program.getRegister("x26").equals(memoryBase(store, 1))
-        || !java.util.Objects.equals(displacement(load, 2), displacement(store, 1))
-        || !Long.valueOf(size - 1).equals(immediateArithmetic(program, code.get(5), "sub", "x0"))) {
+        || !java.util.Objects.equals(displacement(load, 2), displacement(store, 1))) {
       return null;
     }
     for (var instruction : List.of(load, store)) {
@@ -544,7 +553,11 @@ final class DartThreadCalls {
         return null;
       }
     }
-    int index = 6;
+    int index = 5;
+    if (!untagged && !Long.valueOf(size - 1).equals(
+        immediateArithmetic(program, code.get(index++), "sub", "x0"))) {
+      return null;
+    }
     // Header construction can use one or several MOV/MOVK immediates; the
     // particular tag word belongs to the object layout, not the ABI proof.
     if (!mnemonic(code.get(index), "mov")) {
@@ -553,19 +566,25 @@ final class DartThreadCalls {
     while (index < code.size()
         && (mnemonic(code.get(index), "mov") || mnemonic(code.get(index), "movk"))) {
       var instruction = code.get(index++);
-      if (!registerOperand(instruction, 0, program, "x1") || instruction.getOpObjects(1).length != 1
+      if (!registerOperand(instruction, 0, program, tags) || instruction.getOpObjects(1).length != 1
           || !(instruction.getOpObjects(1)[0] instanceof Scalar)) {
         return null;
       }
     }
     var header = code.get(index++);
-    if (!mnemonic(header, "stur") || !registerOperand(header, 0, program, "x1")
+    if (!(mnemonic(header, "str") || mnemonic(header, "stur"))
+        || !registerOperand(header, 0, program, tags)
         || !program.getRegister("x0").equals(memoryBase(header, 1))
-        || !Long.valueOf(-1).equals(displacement(header, 1))) {
+        || writesRegister(header, program.getRegister("x0"))
+        || !Long.valueOf(untagged ? 0 : -1).equals(displacement(header, 1))) {
       return null;
     }
     if (mnemonic(code.get(index), "dmb")) {
       index++;
+    }
+    if (untagged && !Long.valueOf(1).equals(
+        immediateArithmetic(program, code.get(index++), "add", "x0"))) {
+      return null;
     }
     return index + 1 == code.size() ? slow : null;
   }
@@ -654,15 +673,21 @@ final class DartThreadCalls {
     int bytes = 0;
     while (index < body.size()) {
       var instruction = body.get(index);
-      if (!mnemonic(instruction, "stp")) {
+      // Older PushRegisters emits individual Q saves; odd CPU sets also
+      // have a single leftover save. Newer SDKs pair the Q registers.
+      // Keep the same exact saved set, writeback and inverse-restore proof.
+      var first = instruction.getRegister(0);
+      List<Register> registers;
+      if (mnemonic(instruction, "str") && first != null
+          && (first.getNumBytes() == 8 || first.getNumBytes() == 16)) {
+        registers = List.of(first);
+      } else if (mnemonic(instruction, "stp")) {
+        var second = instruction.getRegister(1);
+        if (first == null || second == null) return null;
+        registers = List.of(first, second);
+      } else {
         break;
       }
-      var first = instruction.getRegister(0);
-      var second = instruction.getRegister(1);
-      if (first == null || second == null) {
-        return null;
-      }
-      var registers = List.of(first, second);
       if (!stackSave(program, instruction, registers, true)) {
         return null;
       }
@@ -679,6 +704,11 @@ final class DartThreadCalls {
     var expected = new java.util.HashSet<Register>();
     for (int register : AVAILABLE) {
       expected.add(program.getRegister("x" + register));
+    }
+    // The separate-heap-base compiler model reserves x23. Its odd CPU set
+    // also accounts for the SDK's final single-register push/pop.
+    if (program.getCompilerSpec().isGlobal(program.getRegister("x23").getAddress())) {
+      expected.remove(program.getRegister("x23"));
     }
     boolean fpu = saved.contains(program.getRegister("q0"));
     if (fpu) {
@@ -824,6 +854,23 @@ final class DartThreadCalls {
   private static boolean isStore(Instruction instruction) {
     return mnemonic(instruction, "str") || mnemonic(instruction, "stur")
         || mnemonic(instruction, "stlr");
+  }
+
+  /**
+   * With a separate barrier mask, BARRIER_MASK was the complete x28 value;
+   * newer code uses its upper word in packed HEAP_BITS. Accept these actual
+   * arithmetic forms independently of SDK metadata, not arbitrary shifts.
+   */
+  private static boolean barrierMask(Instruction test, Register mask) {
+    if (rightShift(test, mask, 32)) return true;
+    for (var op : test.getPcode()) {
+      if (op.getOpcode() != PcodeOp.INT_AND) continue;
+      for (var input : op.getInputs()) {
+        if (input.isRegister() && input.getSize() == 8
+            && input.getAddress().equals(mask.getAddress())) return true;
+      }
+    }
+    return false;
   }
 
   private static boolean rightShift(Instruction instruction, Register register, long amount) {

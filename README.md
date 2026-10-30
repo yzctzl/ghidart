@@ -41,7 +41,8 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
 ## Usage
 
 1. For ELF, choose **Dart AOT ELF**. For Mach-O, use the official loader and select
-   language `AARCH64:LE:64:dart`, compiler `dart`; choose the ARM64 slice for FAT files.
+   language `AARCH64:LE:64:dart`, compiler `dart` (or `dart-r23` for Dart 2.13-era binaries
+   with dedicated x23 heap base); choose the ARM64 slice for FAT files.
 2. Place a matching `b4a.json` beside the binary, or set
    **Dart AOT Code Boundaries → b4a.json path**. Identity or mapping mismatches reject the import.
 3. Without boundary data, select a Dart managed code region and run
@@ -92,6 +93,21 @@ Automatic Dart string discovery is not implemented; it requires object facts fro
 Supported stack-check and write-barrier call sites receive local
 contracts; direct shared helpers require matching saves, restores and result slots.
 Unresolved indirect destinations remain indirect. L2/L3 metadata can add stronger facts.
+
+## Compatibility
+
+L1 targets ARM64 Dart 2.10 through the current stable release (3.13.7).
+SDK source checks cover 30 release tags; real-binary checks cover selected versions,
+not every release or OS combination. Versions before 2.10 are outside the current scope.
+
+The common model handles stack and register arguments, old/new barrier masks,
+individual/paired Q saves and old/new Mint allocation paths from machine-code evidence.
+For the 2.13-era ABI with a dedicated x23 heap base, select `dart-r23` explicitly;
+it is derived from the common compiler specification, without snapshot hashes.
+
+This update fixes unconditional `b.al` decoding. Accept Ghidra's language upgrade
+when opening an existing database, then rerun discovery and ABI analysis as needed.
+User-edited functions remain protected.
 
 ## Files and verification
 

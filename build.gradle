@@ -49,6 +49,25 @@ def prepareAarch64Language = tasks.register('prepareAarch64Language') {
     }
 }
 
+// A short-lived ARM64 ABI kept the heap base in x23. Derive its model from
+// the common specification so fixes never require maintaining a second copy.
+def prepareDartCompilerSpecs = tasks.register('prepareDartCompilerSpecs') {
+    def source = new File(languageDir, 'AARCH64dart.cspec')
+    def target = new File(languageDir, 'AARCH64dart-r23.cspec')
+    inputs.file(source)
+    outputs.file(target)
+    doLast {
+        def spec = new groovy.xml.XmlParser(false, false).parse(source)
+        spec.global[0].appendNode('register', [name: 'x23'])
+        def managed = spec.default_proto.prototype[0]
+        def clobber = managed.killedbycall.register.find { it.@name == 'x23' }
+        if (clobber == null) throw new GradleException('Missing managed x23 clobber')
+        managed.killedbycall[0].remove(clobber)
+        managed.unaffected[0].appendNode('register', [name: 'x23'])
+        target.setText(groovy.xml.XmlUtil.serialize(spec), 'UTF-8')
+    }
+}
+
 // The official module macro keeps both builds and user-directory installations
 // independent of checkout paths; no official source files are copied or patched.
 def compileDartLanguage = tasks.register('compileDartLanguage', Exec) {
@@ -105,7 +124,7 @@ tasks.register('verifySamples', JavaExec) {
 
 tasks.named('buildExtension') {
     includeEmptyDirs = false
-    dependsOn verifySources, prepareAarch64Language, compileDartLanguage
+    dependsOn verifySources, prepareAarch64Language, prepareDartCompilerSpecs, compileDartLanguage
     exclude 'data/languages/AARCH64.sla', 'samples/**', 'tools/**', 'tests/**', 'local/**', 'ghidra_scripts/b4a/**', '.git/**', '.gitignore', '.vscode/**',
         'gradle.properties', 'ghidart-OLD/**'
     // Exclude the local Ghidra distribution.

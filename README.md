@@ -111,6 +111,9 @@ User-edited functions remain protected.
 
 ## Files and verification
 
+L2 groundwork provides a bounded snapshot byte reader and a shared function-boundary
+publisher. Snapshot decoding and object publication are planned L2 work.
+
 Sources are in `src/main/java/ghidart/`; language definitions are in `data/languages/`.
 The build references the installed official ARM64 sources through Ghidra's module
 macro. A small SLEIGH wrapper exposes equivalent signed-word arithmetic; it keeps

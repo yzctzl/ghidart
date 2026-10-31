@@ -107,7 +107,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
       }
 
       verifyIdentity(program, index);
-      DiscoveryStats stats = discover(program, index, monitor, log);
+      DiscoveryStats stats = applyBoundaries(program, index.codeUnits(), monitor, log);
       if (stats.functionsCreated + stats.functionsExisting == 0) {
         throw new IllegalArgumentException("no Dart functions could be created; boundary import incomplete");
       }
@@ -184,15 +184,15 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     }
   }
 
-  private static DiscoveryStats discover(
-      Program program, DartCodeIndex index, TaskMonitor monitor, MessageLog log)
+  static DiscoveryStats applyBoundaries(
+      Program program, java.util.List<DartCodeIndex.CodeUnit> units, TaskMonitor monitor, MessageLog log)
       throws CancelledException {
     Address base = program.getImageBase();
     Memory memory = program.getMemory();
     AddressSet ranges = new AddressSet();
     AddressSet seeds = new AddressSet();
 
-    for (DartCodeIndex.CodeUnit unit : index.codeUnits()) {
+    for (DartCodeIndex.CodeUnit unit : units) {
       monitor.checkCancelled();
       Address start = base.add(unit.start());
       Address end = base.add(unit.end() - 1);
@@ -220,8 +220,8 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     }
 
     DiscoveryStats stats = new DiscoveryStats();
-    monitor.initialize(index.codeUnits().size(), "Creating Dart functions");
-    for (DartCodeIndex.CodeUnit unit : index.codeUnits()) {
+    monitor.initialize(units.size(), "Creating Dart functions");
+    for (DartCodeIndex.CodeUnit unit : units) {
       monitor.checkCancelled();
       createEntryLabels(program, base, unit, stats);
       if (unit.primaryEntry() == null) {
@@ -300,10 +300,10 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     }
   }
 
-  private static final class DiscoveryStats {
-    private int functionsCreated;
-    private int functionsExisting;
-    private int entryLabelsCreated;
-    private int functionsSkipped;
+  static final class DiscoveryStats {
+    int functionsCreated;
+    int functionsExisting;
+    int entryLabelsCreated;
+    int functionsSkipped;
   }
 }

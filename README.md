@@ -16,6 +16,7 @@ Features:
 - PP-relative access and constant-use indexing, with references for proved concrete addresses and calls.
 - Finite indirect-jump recovery through native switch/SSA analysis and complete CFG checks.
 - Optional native heap-base expression names and explicit-length character data types.
+- Optional AOT snapshot decoding for function entries, explicit-length strings and scoped object-pool data (L2).
 - Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
 
 **Experimental: correctness and stability have not been comprehensively verified.**
@@ -43,11 +44,25 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
 1. For ELF, choose **Dart AOT ELF**. For Mach-O, use the official loader and select
    language `AARCH64:LE:64:dart`, compiler `dart` (or `dart-r23` for Dart 2.13-era binaries
    with dedicated x23 heap base); choose the ARM64 slice for FAT files.
-2. Place a matching `b4a.json` beside the binary, or set
-   **Dart AOT Code Boundaries → b4a.json path**. Identity or mapping mismatches reject the import.
-3. Without boundary data, select a Dart managed code region and run
-   **Dart Machine Code Functions** once. Add known entries through **Confirmed entry addresses**.
-4. Run **Dart ABI** on the functions and relevant callees, then open the decompiler.
+2. Choose one initial boundary source:
+   - Supported snapshot, without b4a: run **Dart AOT Objects** (L2). It creates
+     functions and entry labels, strings, object relationships and scoped pools.
+   - Matching `b4a.json`: run **Dart AOT Code Boundaries**, or leave this analyzer
+     enabled during Auto Analyze. Place the JSON beside the binary or set its path.
+     This currently imports boundaries and entry labels, not all b4a semantics.
+   - Unreadable/custom snapshot: select the managed executable region and run
+     **Dart Machine Code Functions** (L1). Add known entries through
+     **Confirmed entry addresses** if needed.
+3. Select the functions of interest and run **Dart ABI**, then open the decompiler.
+   ABI recovery is still required after L2 or b4a supplies boundaries.
+4. Optionally run **Dart Value Uses** after ABI recovery.
+
+All five actions are available under **Analysis → One Shot** for the Dart language.
+L2 and b4a boundary import read their complete input, regardless of selection;
+selection limits the machine-code discovery and ABI/value analysis entry sets.
+L1/L2/b4a are not yet an automatic fallback chain. Choose a boundary source first,
+then run ABI analysis. A language **upgrade** updates the database's language model;
+it does not enable L2 or establish that the analysis passes have run.
 
 Machine-code discovery and ABI analysis are disabled by default to avoid scanning
 mixed native code or decompiling the entire input during import. Incomplete control
@@ -88,7 +103,35 @@ rules when inlining a character pointer: embedded NUL content is not fully inlin
 Run **ShowDartCharacters.java** on typed data or an instruction referencing it to
 print the full payload, address, byte length and escaped code units in the console.
 This view preserves NULs and lone surrogates without changing decompiler semantics.
-Automatic Dart string discovery is not implemented; it requires object facts from L2/L3.
+For supported snapshots, optionally run **Dart AOT Objects** before **Dart ABI**.
+This L2 analyzer reads mapped snapshot symbols independently of b4a, creates function
+and alternate-entry boundaries, defines string payloads in **Defined Strings**, and
+stores object relationships and pool slots in non-loaded `DartObjects_*` blocks in the `OTHER` address space.
+Browse **Symbol Tree → Namespaces/Classes → Dart** for library URL, class and function
+scopes. Top-level functions belong to their library; known allocation/field stubs belong
+to their class. Shared machine code keeps declaration labels in each owning scope
+and a single function body. **Dart → ObjectPools → isolate → pool_<id> → slots** opens the logical
+pool in Listing: comments show each PP offset, kind, initial value and patchability.
+Tagged slots link to logical objects and retained string payloads. These links describe
+snapshot values, not constants guaranteed after runtime mutation. Strings can be reached
+through object and pool references. Machine-code PP integration remains under development.
+Serialized string length/encoding
+prefixes are defined separately from their characters; they are not trailing garbage.
+These logical identities are not runtime heap addresses. Declaration relationships,
+types, logical signatures and decoded integers are retained as database properties;
+logical parameter counts do not replace machine-code ABI inference. Serialized
+object fields and byte spans are retained alongside these views. Adapted root layouts
+also retain named roots, static fields and dispatch Code indices as navigable database
+slots. Full version coverage and hash-independent format selection remain under development. Pool offsets
+alone do not identify an object or a string at a machine-code use site.
+
+L2 is disabled by default. Unknown formats, unadapted roots or invalid cluster data are rejected;
+L1 remains independent. A successful run reports function-name, string and pool-slot counts
+and `Root stream fully consumed` in the console. `L2 rejected` means no L2 data was published.
+Repeating the same input is harmless. If published snapshot
+bytes or mappings change, L2 preserves the existing generation and rejects replacement;
+use a fresh import for the changed binary. Format profiles cover selected SDK layouts,
+not every release between 2.10 and 3.13.
 
 Supported stack-check and write-barrier call sites receive local
 contracts; direct shared helpers require matching saves, restores and result slots.
@@ -110,9 +153,6 @@ when opening an existing database, then rerun discovery and ABI analysis as need
 User-edited functions remain protected.
 
 ## Files and verification
-
-L2 groundwork provides a bounded snapshot byte reader and a shared function-boundary
-publisher. Snapshot decoding and object publication are planned L2 work.
 
 Sources are in `src/main/java/ghidart/`; language definitions are in `data/languages/`.
 The build references the installed official ARM64 sources through Ghidra's module

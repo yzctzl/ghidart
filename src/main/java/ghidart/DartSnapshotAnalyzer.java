@@ -234,6 +234,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         + snapshot.data() + ":" + snapshot.instructions();
     String previous = program.getOptions(OWNER).getString(option, "");
     if (identity.equals(previous)) {
+      enrich(program, snapshot, monitor, log);
       log.appendMsg("Dart AOT Objects", snapshot.scope() + ": validated facts already published.");
       return;
     }
@@ -455,6 +456,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         // An existing definition wins. Object facts still retain the original name.
       }
     }
+    enrich(program, snapshot, monitor, log);
     program.getOptions(OWNER).setString(option, identity);
     log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + snapshot.units().size()
         + " payloads (" + objects.codes.stream().filter(code -> code.clusterIndex >= 0).count()
@@ -463,6 +465,18 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         + objects.poolEntries.size() + " scoped pool slots, " + objects.objects.size()
         + " retained object records; " + rootSlots + " root/dispatch slots."
         + (roots == null ? " Root layout is not yet adapted." : " Root stream fully consumed."));
+  }
+
+  /** Presentation can be added to an existing, byte-identical L2 generation. */
+  private static void enrich(Program program, Snapshot snapshot, TaskMonitor monitor, MessageLog log)
+      throws IOException, CancelledException {
+    String option = OWNER + "." + snapshot.scope() + ".presentation";
+    Address anchor = program.getMemory().getBlock("DartObjects_" + snapshot.scope()).getStart();
+    if (program.getOptions(OWNER).getInt(option, 0) != 1) {
+      DartSnapshotSymbols.publish(program, snapshot, anchor, monitor, log);
+      program.getOptions(OWNER).setInt(option, 1);
+    }
+
   }
 
   /** Materialize a named root or table slot without pretending it is a runtime address. */

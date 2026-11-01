@@ -2065,7 +2065,7 @@ public final class DartClusterParser {
     }
     long align = profile.topLevelCid16 ? 16L : 64L;
     long diStart = header.snapshotOffset + DartInstructionsTable.roundUp(header.totalSize, align);
-    if (diStart <= 0 || diStart >= data.length) {
+    if (diStart <= 0 || diStart > data.length - 16L) {
       throw new IOException("missing read-only string image");
     }
 

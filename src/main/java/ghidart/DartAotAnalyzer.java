@@ -50,6 +50,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
         "Disassembles and creates functions from validated Dart Code payload ranges.",
         AnalyzerType.BYTE_ANALYZER);
     setPriority(AnalysisPriority.DISASSEMBLY.before());
+    setSupportsOneTimeAnalysis();
   }
 
   @Override

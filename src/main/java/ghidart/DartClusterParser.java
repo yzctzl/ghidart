@@ -1514,8 +1514,8 @@ public final class DartClusterParser {
       throw new IOException("loading unit parent has no global ObjectPool");
     }
     var updates = new java.util.LinkedHashMap<Integer, Integer>();
-    // SDK 2.10 keeps deferred literals in the root pool; later writers patch them.
-    long position = profile.preCanonicalSplit ? pool.size() : s.readUnsigned();
+    // SDK 2.10/2.12 keep deferred literals in the root pool; 2.13 adds patches.
+    long position = profile.unitPoolPatches ? s.readUnsigned() : pool.size();
     if (position < 0 || position > pool.size()) {
       throw new IOException("deferred pool start outside parent pool");
     }
@@ -1877,7 +1877,8 @@ public final class DartClusterParser {
           u
               ? new ScalarOp[] {ScalarOp.UNSIGNED, ScalarOp.TAGGED_32, ScalarOp.TAGGED_32}
               : new ScalarOp[] {ScalarOp.UNSIGNED, ScalarOp.TAGGED_32};
-      return new FillSpec(FillKind.REFS, numRefs, scalars, 0, 1, 2, false, false, false);
+      return new FillSpec(
+          FillKind.REFS, numRefs, scalars, 0, 1, profile.funcSignatureRef, false, false, false);
     }
     if (cid == ct.clazz) {
       int numRefs = profile.classNumRefs > 0 ? profile.classNumRefs : 13;
@@ -1891,7 +1892,10 @@ public final class DartClusterParser {
       // not the packed/default-type-arguments scalar introduced afterwards.
       if (profile.preCanonicalSplit) return new FillSpec(FillKind.REFS, 3, null, -1, -1);
       int numRefs = profile.closureDataNumRefs > 0 ? profile.closureDataNumRefs : 2;
-      return new FillSpec(FillKind.REFS, numRefs, new ScalarOp[] {ScalarOp.UNSIGNED}, -1, -1);
+      // 2.12 stores default_type_arguments_info as a Smi reference; 2.13
+      // packs it into an unsigned scalar instead. Keep the old object edge.
+      ScalarOp[] scalars = numRefs == 4 ? null : new ScalarOp[] {ScalarOp.UNSIGNED};
+      return new FillSpec(FillKind.REFS, numRefs, scalars, -1, -1);
     }
     if (cid == ct.field) {
       if (u) {
@@ -1931,7 +1935,7 @@ public final class DartClusterParser {
     if (cid == ct.namespace) {
       // Before Namespace::to_snapshot(FullAOT) narrowed to target_, all four
       // references were retained, including show/hide filters and metadata.
-      return new FillSpec(FillKind.REFS, profile.preCanonicalSplit ? 4 : 1, null, -1, -1);
+      return new FillSpec(FillKind.REFS, profile.namespaceNumRefs, null, -1, -1);
     }
     if (cid == ct.closure) {
       return new FillSpec(FillKind.REFS, 6, null, -1, -1)
@@ -2246,12 +2250,15 @@ public final class DartClusterParser {
         break;
       case INLINE_BYTES:
         for (long i = 0; i < cm.count; i++) {
-          long len = s.readUnsigned();
+          long encoded = s.readUnsigned();
+          // CompressedStackMaps uses two flag bits below SizeField; the
+          // other byte clusters serialize a plain length (SDK WriteFill).
+          long len = cm.cid == profile.cids.compressedStackMaps ? encoded >>> 2 : encoded;
           int offset = s.position();
           int length = checkedLength(len);
           s.skip(length);
           objects.add(new ObjectData(cm.startRef + (int) i, cm.cid, new int[0],
-              new long[] {len}, offset, length));
+              new long[] {encoded}, offset, length));
         }
         break;
       case REFS:

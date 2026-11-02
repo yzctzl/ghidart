@@ -79,6 +79,7 @@ public final class DartVersionProfile {
   public final int classNumRefs;
   public final boolean classHasTokenPos;
   public final int funcNumRefs;
+  public final int funcSignatureRef;
   public final int typeNumRefs;
   public final boolean typeClassIdIsRef;
   public final boolean typeHasTokenPos;
@@ -92,6 +93,8 @@ public final class DartVersionProfile {
   public final int codeStateBitsAfterRef;
   public final boolean codeStateBitsAtEnd;
   public final int closureDataNumRefs;
+  public final int namespaceNumRefs;
+  public final boolean unitPoolPatches;
   public final boolean scriptHasLineCol;
   public final boolean scriptHasFlags;
 
@@ -124,6 +127,7 @@ public final class DartVersionProfile {
     this.classNumRefs = b.classNumRefs;
     this.classHasTokenPos = b.classHasTokenPos;
     this.funcNumRefs = b.funcNumRefs;
+    this.funcSignatureRef = b.funcSignatureRef;
     this.typeNumRefs = b.typeNumRefs;
     this.typeClassIdIsRef = b.typeClassIdIsRef;
     this.typeHasTokenPos = b.typeHasTokenPos;
@@ -137,6 +141,8 @@ public final class DartVersionProfile {
     this.codeStateBitsAfterRef = b.codeStateBitsAfterRef;
     this.codeStateBitsAtEnd = b.codeStateBitsAtEnd;
     this.closureDataNumRefs = b.closureDataNumRefs;
+    this.namespaceNumRefs = b.namespaceNumRefs;
+    this.unitPoolPatches = b.unitPoolPatches;
     this.scriptHasLineCol = b.scriptHasLineCol;
     this.scriptHasFlags = b.scriptHasFlags;
   }
@@ -180,6 +186,7 @@ public final class DartVersionProfile {
     b.classNumRefs = this.classNumRefs;
     b.classHasTokenPos = this.classHasTokenPos;
     b.funcNumRefs = this.funcNumRefs;
+    b.funcSignatureRef = this.funcSignatureRef;
     b.typeNumRefs = this.typeNumRefs;
     b.typeClassIdIsRef = this.typeClassIdIsRef;
     b.typeHasTokenPos = this.typeHasTokenPos;
@@ -193,6 +200,8 @@ public final class DartVersionProfile {
     b.codeStateBitsAfterRef = this.codeStateBitsAfterRef;
     b.codeStateBitsAtEnd = this.codeStateBitsAtEnd;
     b.closureDataNumRefs = this.closureDataNumRefs;
+    b.namespaceNumRefs = this.namespaceNumRefs;
+    b.unitPoolPatches = this.unitPoolPatches;
     b.scriptHasLineCol = this.scriptHasLineCol;
     b.scriptHasFlags = this.scriptHasFlags;
     return b;
@@ -228,6 +237,7 @@ public final class DartVersionProfile {
     int classNumRefs = 13;
     boolean classHasTokenPos = false;
     int funcNumRefs = 4;
+    int funcSignatureRef = 2;
     int typeNumRefs = 3;
     boolean typeClassIdIsRef = false;
     boolean typeHasTokenPos = false;
@@ -241,6 +251,8 @@ public final class DartVersionProfile {
     int codeStateBitsAfterRef = 0;
     boolean codeStateBitsAtEnd = false;
     int closureDataNumRefs = 2;
+    int namespaceNumRefs = 4;
+    boolean unitPoolPatches = false;
     boolean scriptHasLineCol = false;
     boolean scriptHasFlags = false;
 
@@ -328,6 +340,7 @@ public final class DartVersionProfile {
     layout.classLayout = new ClassLayout(8, 13, 15, 10);
     layout.classHasTokenPos = true;
     layout.funcNumRefs = 7;
+    layout.funcSignatureRef = -1; // Result type and parameter types are separate objects.
     layout.typeNumRefs = 5;
     layout.typeClassIdIsRef = true;
     layout.typeHasTokenPos = true;
@@ -340,7 +353,7 @@ public final class DartVersionProfile {
     layout.codeEncoding = CodeFormat.BARE_OFFSETS;
     register("2.10.0", layout);
 
-    // SDK 2.13.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
+    // SDK 2.12.0: vm/clustered_snapshot.cc.
     layout.headerFields = 5;
     layout.cids = DartClassId.CIDS_V2_12;
     layout.splitCanonical = true;
@@ -348,17 +361,26 @@ public final class DartVersionProfile {
     layout.classNumRefs = 15;
     layout.classLayout = new ClassLayout(8, 12, 14, 10);
     layout.funcNumRefs = 5;
+    layout.funcSignatureRef = 3; // parameter_names precedes signature in 2.12 and 2.13.
     layout.typeNumRefs = 4;
     layout.typeHasTokenPos = false;
     layout.funcTypeOldScalars = true;
     layout.typeParamWideScalars = true;
-    layout.codeStateBitsAfterRef = 1;
-    layout.codeStateBitsAtEnd = false;
-    layout.closureDataNumRefs = 3;
+    layout.codeStateBitsAfterRef = 0;
+    layout.codeStateBitsAtEnd = true;
+    layout.closureDataNumRefs = 4;
     layout.scriptHasFlags = false;
     // SDK 2.12 has split canonical clusters but rebuilds canonical sets after loading.
     layout.serializedCanonicalSets = false;
     register("2.12.0", layout);
+
+    // 2.13 moves Code state_bits after compressed_stackmaps, packs ClosureData
+    // metadata, narrows Namespace to target_ and adds deferred pool patches.
+    layout.codeStateBitsAfterRef = 1;
+    layout.codeStateBitsAtEnd = false;
+    layout.closureDataNumRefs = 3;
+    layout.namespaceNumRefs = 1;
+    layout.unitPoolPatches = true;
     layout.cids = DartClassId.CIDS_V2_13;
     layout.serializedCanonicalSets = true;
     register("2.13.0", layout);
@@ -372,6 +394,7 @@ public final class DartVersionProfile {
     layout.classLayout = new ClassLayout(7, 11, -1, 9);
     layout.classHasTokenPos = false;
     layout.funcNumRefs = 4;
+    layout.funcSignatureRef = 2;
     layout.funcTypeOldScalars = false;
     layout.typeParamNumRefs = 3;
     layout.typeParamWideScalars = false;
@@ -382,14 +405,15 @@ public final class DartVersionProfile {
 
     // SDK 2.15.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
     layout.cids = DartClassId.CIDS_V2_15;
+    // StringSerializationCluster already combines width and length in 2.15.
+    layout.oldStringFormat = false;
+    layout.typeNumRefs = 3;
+    layout.typeClassIdIsRef = false;
     register("2.15.0", layout);
 
     // SDK 2.16.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
     layout.headerFields = 6;
     layout.cids = DartClassId.CIDS_V2_16;
-    layout.oldStringFormat = false;
-    layout.typeNumRefs = 3;
-    layout.typeClassIdIsRef = false;
     layout.codeNumRefs = 6;
     layout.codeTextOffsetDelta = false;
     layout.codeEncoding = CodeFormat.INSTRUCTIONS_TABLE;

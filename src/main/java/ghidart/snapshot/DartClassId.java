@@ -1,4 +1,4 @@
-package ghidart;
+package ghidart.snapshot;
 
 import java.util.HashMap;
 import java.util.Map;

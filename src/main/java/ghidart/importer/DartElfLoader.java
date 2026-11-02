@@ -7,7 +7,7 @@
  * This loader neither parses Dart objects nor discovers function boundaries;
  * Mach-O continues to use the official loader with explicit language selection.
  */
-package ghidart;
+package ghidart.importer;
 
 import ghidra.app.util.bin.ByteProvider;
 import ghidra.app.util.bin.format.elf.ElfException;

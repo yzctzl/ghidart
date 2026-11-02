@@ -1,4 +1,4 @@
-package ghidart;
+package ghidart.snapshot;
 
 import java.io.EOFException;
 import java.io.IOException;

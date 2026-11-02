@@ -1,8 +1,8 @@
-package ghidart;
+package ghidart.analysis;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import ghidart.DartValueAnalyzer.ObjectUse;
+import ghidart.analysis.DartValueAnalyzer.ObjectUse;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.PointerTypedef;
@@ -51,12 +51,14 @@ final class DartObjectUses {
     ObjectValue(Address type, Set<Address> candidates, long displacement, Address instance) {
       this(type, candidates, displacement, instance, false);
     }
+    @SuppressWarnings("unused")
     ObjectValue(Address type, long displacement) {
       this(type, type == null ? Set.of() : Set.of(type), displacement, null);
     }
     ObjectValue(Address type, long displacement, Address instance) {
       this(type, type == null ? Set.of() : Set.of(type), displacement, instance);
     }
+    @SuppressWarnings("unused")
     ObjectValue(Set<Address> candidates, long displacement) {
       this(candidates.size() == 1 ? candidates.iterator().next() : null, candidates, displacement, null);
     }

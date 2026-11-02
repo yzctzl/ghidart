@@ -8,8 +8,10 @@
  * Without a sidecar this analyzer does nothing: it is not an independent
  * snapshot parser or a heuristic prologue-based function finder.
  */
-package ghidart;
+package ghidart.importer;
 
+import ghidart.analysis.DartAnalysisLog;
+import ghidart.analysis.DartFunctionAnalyzer;
 import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.cmd.function.CreateFunctionCmd;
 import ghidra.app.services.AbstractAnalyzer;
@@ -21,7 +23,6 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Function;
-import ghidra.util.exception.InvalidInputException;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.InstructionIterator;
 import ghidra.program.model.listing.Program;
@@ -29,6 +30,7 @@ import ghidra.program.model.mem.Memory;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.symbol.Symbol;
 import ghidra.util.exception.CancelledException;
+import ghidra.util.exception.InvalidInputException;
 import ghidra.util.task.TaskMonitor;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -185,7 +187,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     }
   }
 
-  static DiscoveryStats applyBoundaries(
+  public static DiscoveryStats applyBoundaries(
       Program program, java.util.List<DartCodeIndex.CodeUnit> units, TaskMonitor monitor, MessageLog log)
       throws CancelledException {
     Address base = program.getImageBase();
@@ -322,10 +324,18 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     }
   }
 
-  static final class DiscoveryStats {
+  public static final class DiscoveryStats {
     int functionsCreated;
     int functionsExisting;
     int entryLabelsCreated;
     int functionsSkipped;
+
+    public int functionsCreated() {
+      return functionsCreated;
+    }
+
+    public int entryLabelsCreated() {
+      return entryLabelsCreated;
+    }
   }
 }

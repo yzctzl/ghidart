@@ -8,7 +8,7 @@
  * Owned type substitutions are recorded separately and revoked before ABI
  * reanalysis. User/imported prototypes and edited generated layouts are kept.
  */
-package ghidart;
+package ghidart.analysis;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonParseException;

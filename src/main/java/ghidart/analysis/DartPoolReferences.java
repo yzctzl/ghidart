@@ -1,5 +1,7 @@
-package ghidart;
+package ghidart.analysis;
 
+import ghidart.snapshot.DartClusterParser;
+import ghidart.snapshot.DartSnapshotAnalyzer;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.listing.Program;
@@ -23,11 +25,11 @@ import java.util.Map;
  * folded: a direct data xref denotes the serialized initial slot value, including
  * patchable slots, rather than a claim about its value after runtime mutation.
  */
-final class DartPoolReferences {
+public final class DartPoolReferences {
   private record Key(Address address, int size) {}
   private record Value(boolean pp, long offset) {}
 
-  static int publish(Program program, DartSnapshotAnalyzer.Snapshot snapshot, Address anchor,
+  public static int publish(Program program, DartSnapshotAnalyzer.Snapshot snapshot, Address anchor,
       TaskMonitor monitor) throws CancelledException, IOException {
     var objects = snapshot.objects();
     Integer pool = objects.roots.references().get("object_store.global_object_pool");

@@ -1,5 +1,5 @@
 /** Route ghidart analysis messages to the active tool's console. */
-package ghidart;
+package ghidart.analysis;
 
 import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 import ghidra.app.services.ConsoleService;
@@ -8,12 +8,12 @@ import ghidra.program.model.listing.Program;
 import ghidra.util.Msg;
 
 /** Keep Ghidra's shared analysis log for other analyzers and headless callers. */
-final class DartAnalysisLog implements AutoCloseable {
+public final class DartAnalysisLog implements AutoCloseable {
   private final MessageLog messages;
   private final ConsoleService console;
   private final boolean redirected;
 
-  DartAnalysisLog(Program program, MessageLog original) {
+  public DartAnalysisLog(Program program, MessageLog original) {
     var manager = AutoAnalysisManager.hasAutoAnalysisManager(program)
         ? AutoAnalysisManager.getAnalysisManager(program) : null;
     var tool = manager == null ? null : manager.getAnalysisTool();
@@ -22,7 +22,7 @@ final class DartAnalysisLog implements AutoCloseable {
     messages = redirected ? new MessageLog() : original;
   }
 
-  MessageLog messages() {
+  public MessageLog messages() {
     return messages;
   }
 

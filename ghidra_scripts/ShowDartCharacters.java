@@ -4,8 +4,8 @@
 // is used. Unlike C literal inlining, this view preserves embedded zeroes.
 // @category Dart
 
-import ghidart.DartLatin1DataType;
-import ghidart.DartUtf16DataType;
+import ghidart.datatype.DartLatin1DataType;
+import ghidart.datatype.DartUtf16DataType;
 import ghidra.app.script.GhidraScript;
 import ghidra.program.model.listing.Data;
 import java.util.LinkedHashSet;

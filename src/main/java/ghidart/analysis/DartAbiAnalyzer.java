@@ -10,17 +10,17 @@
  * it does not maintain handwritten instruction semantics. Whole-program
  * recovery remains opt-in; bytes and the debugger's register view are unchanged.
  */
-package ghidart;
+package ghidart.analysis;
 
-import ghidra.app.cmd.function.DecompilerParameterIdCmd;
-import ghidra.framework.options.Options;
 import ghidra.app.cmd.function.CreateFunctionCmd;
+import ghidra.app.cmd.function.DecompilerParameterIdCmd;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileOptions;
 import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
+import ghidra.framework.options.Options;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;

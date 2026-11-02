@@ -7,7 +7,7 @@
  * This is a decompiler view: bytes, disassembly, function ranges and debugger
  * registers remain unchanged. Control flow or incomplete bodies reject inlining.
  */
-package ghidart;
+package ghidart.analysis;
 
 import ghidra.app.plugin.processors.sleigh.SleighLanguage;
 import ghidra.program.model.address.AddressSet;

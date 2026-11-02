@@ -1,7 +1,7 @@
-package ghidart;
+package ghidart.snapshot;
 
-import ghidra.app.util.importer.ProgramLoader;
 import ghidra.app.util.importer.MessageLog;
+import ghidra.app.util.importer.ProgramLoader;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.util.exception.CancelledException;

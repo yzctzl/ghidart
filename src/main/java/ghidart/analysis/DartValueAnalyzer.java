@@ -10,7 +10,7 @@
  * call targets and bounded concrete memory accesses receive native references.
  * Reanalysis removes only owned refs and unchanged generated local names.
  */
-package ghidart;
+package ghidart.analysis;
 
 import com.google.gson.Gson;
 import ghidra.app.decompiler.DecompInterface;

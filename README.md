@@ -187,7 +187,18 @@ User-edited functions remain protected.
 
 ## Files and verification
 
-Sources are in `src/main/java/ghidart/`; language definitions are in `data/languages/`.
+Sources are organized under `src/main/java/ghidart/`:
+
+- `analysis/`: function discovery, ABI, value/object uses and P-code injection.
+- `snapshot/`: L2 format profiles, decoding, objects, types and database publication.
+- `importer/`: ELF loading and optional b4a Code boundary import.
+- `datatype/`: explicit-length character data types.
+- `listing/`: the operand field retained for saved layout compatibility.
+
+Shared logging lives in `analysis/`. Moved character and operand classes register
+Ghidra class-name translations for existing databases and layouts.
+
+Language definitions are in `data/languages/`.
 The build references the installed official ARM64 sources through Ghidra's module
 macro. A small SLEIGH wrapper exposes equivalent signed-word arithmetic; it keeps
 instruction encodings and register storage unchanged.

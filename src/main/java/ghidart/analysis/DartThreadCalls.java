@@ -8,7 +8,7 @@
  * An ABI contract never creates a destination address for an indirect call.
  * Snapshot hashes, feature strings, image headers and SDK layouts are unused.
  */
-package ghidart;
+package ghidart.analysis;
 
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;

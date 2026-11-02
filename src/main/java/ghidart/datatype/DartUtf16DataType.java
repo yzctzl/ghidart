@@ -6,7 +6,7 @@
  * The native string renderer exposes malformed units as bytes rather than
  * inventing Unicode text. No Dart layout, length or encoding is inferred here.
  */
-package ghidart;
+package ghidart.datatype;
 
 import ghidra.docking.settings.Settings;
 import ghidra.program.model.data.AbstractStringDataType;
@@ -16,8 +16,13 @@ import ghidra.program.model.data.StringLayoutEnum;
 import ghidra.program.model.data.WideChar16DataType;
 import ghidra.program.model.mem.MemBuffer;
 import ghidra.program.model.mem.MemoryAccessException;
+import ghidra.util.classfinder.ClassTranslator;
 
 public final class DartUtf16DataType extends AbstractStringDataType {
+  static {
+    ClassTranslator.put("ghidart.DartUtf16DataType", DartUtf16DataType.class.getName());
+  }
+
   public DartUtf16DataType() {
     this(null);
   }

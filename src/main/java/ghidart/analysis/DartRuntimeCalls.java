@@ -13,7 +13,7 @@
  * immediate trap; other unknown locations and metadata conflicts reject. This is
  * not a general FFI convention or a classifier for arbitrary VM stubs.
  */
-package ghidart;
+package ghidart.analysis;
 
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.program.model.address.Address;

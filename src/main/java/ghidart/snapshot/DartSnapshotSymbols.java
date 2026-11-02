@@ -1,4 +1,4 @@
-package ghidart;
+package ghidart.snapshot;
 
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.address.Address;
@@ -6,8 +6,8 @@ import ghidra.program.model.data.ArrayDataType;
 import ghidra.program.model.data.ByteDataType;
 import ghidra.program.model.data.QWordDataType;
 import ghidra.program.model.data.StructureDataType;
-import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.CircularDependencyException;
+import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.RefType;

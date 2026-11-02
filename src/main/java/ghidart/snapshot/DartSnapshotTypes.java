@@ -1,9 +1,9 @@
-package ghidart;
+package ghidart.snapshot;
 
 import ghidra.app.util.importer.MessageLog;
 import ghidra.program.model.data.CategoryPath;
-import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DWordDataType;
+import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.QWordDataType;
 import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.data.TypedefDataType;

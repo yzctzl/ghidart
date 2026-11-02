@@ -1,6 +1,13 @@
-package ghidart;
+package ghidart.snapshot;
 
 import com.google.gson.Gson;
+import ghidart.analysis.DartAnalysisLog;
+import ghidart.analysis.DartFunctionAnalyzer;
+import ghidart.analysis.DartPoolReferences;
+import ghidart.datatype.DartLatin1DataType;
+import ghidart.datatype.DartUtf16DataType;
+import ghidart.importer.DartAotAnalyzer;
+import ghidart.importer.DartCodeIndex;
 import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
@@ -9,10 +16,10 @@ import ghidra.framework.options.Options;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.data.QWordDataType;
 import ghidra.program.model.data.ArrayDataType;
-import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.data.DWordDataType;
+import ghidra.program.model.data.QWordDataType;
+import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
@@ -48,7 +55,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
   private static final String PARENT_FILE = "Parent AOT file";
   private String parentFile = "";
 
-  record Snapshot(String scope, Address data, Address instructions, byte[] bytes,
+  public record Snapshot(String scope, Address data, Address instructions, byte[] bytes,
       DartClusterParser.Result objects, DartInstructionsTable table,
       List<DartCodeIndex.CodeUnit> units, boolean vmReferences, String identity) {}
 
@@ -694,7 +701,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     program.getOptions(OWNER).setString(option, identity);
     log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + snapshot.units().size()
         + " payloads (" + objects.codes.stream().filter(code -> code.clusterIndex >= 0).count()
-        + " serialized Code objects), " + stats.functionsCreated + " new functions, " + stats.entryLabelsCreated
+        + " serialized Code objects), " + stats.functionsCreated() + " new functions, " + stats.entryLabelsCreated()
         + " entry labels, " + named + " function names, " + defined + "/" + objects.strings.size() + " string data, "
         + objects.imagePoolEntries().size() + " scoped pool slots, " + objects.objects.size()
         + " retained object records; " + rootSlots + " root/dispatch slots."
@@ -820,7 +827,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
    * Function entries and Code payloads may share a destination. A class or arbitrary
    * instance deliberately has none: its serialized fields are not an in-place object.
    */
-  static Map<Integer, Address> fileTargets(Program program, Snapshot snapshot) throws IOException {
+  public static Map<Integer, Address> fileTargets(Program program, Snapshot snapshot) throws IOException {
     var targets = new LinkedHashMap<Integer, Address>();
     var objects = snapshot.objects();
     if (objects.vm != null && !objects.header.isLoadingUnit) {

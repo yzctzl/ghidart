@@ -156,7 +156,17 @@ SDK 源码检查覆盖 30 个发布标签；真实二进制验证覆盖部分版
 
 ## 文件与校验
 
-源码位于 `src/main/java/ghidart/`，语言定义位于 `data/languages/`。
+源码按职责组织在 `src/main/java/ghidart/` 下：
+
+- `analysis/`：函数发现、ABI、值／对象使用分析及 P-code 注入。
+- `snapshot/`：L2 格式配置、解码、对象、类型与数据库发布。
+- `importer/`：ELF 装载及可选的 b4a Code 边界导入。
+- `datatype/`：显式长度的字符数据类型。
+- `listing/`：兼容已保存布局的操作数字段。
+
+共享日志位于 `analysis/`；迁移的字符和操作数字段类通过 Ghidra 原生类名映射兼容已有数据库和布局。
+
+语言定义位于 `data/languages/`。
 构建通过 Ghidra 模块宏引用已安装的官方 ARM64 源码。小型 SLEIGH 包装仅规范化等价的
 有符号字运算，保留指令编码和寄存器存储，无需维护另一份指令集。
 b4a 数据格式见 [B4A_INTERFACE.md](B4A_INTERFACE.md)。

@@ -7,7 +7,7 @@
  * selected slice of a universal binary; mapped-byte checks belong to the caller.
  * This immutable index describes supplied evidence, not discovered functions.
  */
-package ghidart;
+package ghidart.importer;
 
 import com.google.gson.stream.JsonReader;
 import com.google.gson.stream.JsonToken;

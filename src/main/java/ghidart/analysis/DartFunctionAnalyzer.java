@@ -7,7 +7,7 @@
  * Ghidra supplies instruction semantics and follows unowned shared tails during
  * decompilation; those tails must not be assigned to one arbitrary function.
  */
-package ghidart;
+package ghidart.analysis;
 
 import ghidra.app.cmd.disassemble.DisassembleCommand;
 import ghidra.app.services.AbstractAnalyzer;
@@ -184,7 +184,7 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
    * and bytes, and preserve all other data definitions. No snapshot parsing or
    * external index is needed; discovery remains restricted to the selected region.
    */
-  static void prepareInstructionSnapshots(Program program, AddressSetView region,
+  public static void prepareInstructionSnapshots(Program program, AddressSetView region,
       TaskMonitor monitor) throws CancelledException {
     for (String name : List.of(
         "_kDartVmSnapshotInstructions", "_kDartIsolateSnapshotInstructions",

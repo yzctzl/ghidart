@@ -1,4 +1,4 @@
-package ghidart;
+package ghidart.snapshot;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

@@ -2,7 +2,7 @@
 // Run Dart Value Uses analysis first; rerun it after changing code or signatures.
 // @category Dart
 
-import ghidart.DartValueAnalyzer;
+import ghidart.analysis.DartValueAnalyzer;
 import ghidra.app.script.GhidraScript;
 
 public class ShowDartValueUses extends GhidraScript {

@@ -643,9 +643,9 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       throws IOException, CancelledException {
     String option = OWNER + "." + snapshot.scope() + ".presentation";
     Address anchor = program.getMemory().getBlock("DartObjects_" + snapshot.scope()).getStart();
-    if (program.getOptions(OWNER).getInt(option, 0) != 5) {
+    if (program.getOptions(OWNER).getInt(option, 0) != 6) {
       DartSnapshotSymbols.publish(program, snapshot, anchor, monitor, log);
-      program.getOptions(OWNER).setInt(option, 5);
+      program.getOptions(OWNER).setInt(option, 6);
     }
     String typeOption = OWNER + "." + snapshot.scope() + ".classTypes";
     if (program.getOptions(OWNER).getInt(typeOption, 0) != 2) {

@@ -283,7 +283,11 @@ final class DartSnapshotSymbols {
       } else if (entry.kind == DartClusterParser.PoolEntryKind.IMMEDIATE) {
         text += " = 0x" + Long.toHexString(entry.imm);
       }
-      text += "; snapshot value" + ((entry.bits & (objects.profile.oldPoolFormat ? 128 : 16)) != 0 ? ", patchable slot" : "");
+      text += "; snapshot value" + (entry.isPatchable(objects.profile) ? ", patchable slot" : "");
+      var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
+      var slotFacts = com.google.gson.JsonParser.parseString(facts.getString(address)).getAsJsonObject();
+      slotFacts.addProperty("stableTaggedBits", entry.stableTaggedBits(objects.profile));
+      facts.add(address, slotFacts.toString());
       comment(address, text);
     }
     log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + classes + " class records organized, "

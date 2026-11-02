@@ -355,6 +355,19 @@ public final class DartClusterParser {
       this.imm = imm;
     }
 
+    /** ObjectPoolBuilderEntry used a 7-bit type / bit-7 patchability before
+     * SnapshotBehavior introduced 4-bit types / bit-4 patchability. In both
+     * eras kPatchable=0 and kNotPatchable=1. Trait decoding belongs to the
+     * selected format, not to consumers of an unqualified raw bits byte.
+     */
+    public boolean isPatchable(DartVersionProfile profile) {
+      return (bits & (profile.oldPoolFormat ? 0x80 : 0x10)) == 0;
+    }
+
+    public int stableTaggedBits(DartVersionProfile profile) {
+      return profile.oldPoolFormat ? 0x80 | (profile.poolTypeSwapped ? 1 : 0) : 0x11;
+    }
+
     /** Byte offset relative to the untagged ObjectPool pointer: {@code index * 8 + 16}. */
     public long byteOffsetFromUntaggedPool() {
       return (long) index * 8L + 16L;

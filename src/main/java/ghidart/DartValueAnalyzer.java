@@ -26,7 +26,6 @@ import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOverflowException;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.address.AddressSpace;
-import ghidra.program.model.data.UnsignedLongLongDataType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.LocalVariableImpl;
 import ghidra.program.model.listing.Program;
@@ -55,6 +54,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   private static final Gson JSON = new Gson();
   private static final int ALTERNATIVES = 8;
   private static final String HEAP_NAMES = "Name heap-base expressions";
+  private static final String POOL_NAMES = "Name L2 pool values";
+  private boolean namePoolValues = true;
   private static final String TIMEOUT = "Decompiler timeout (seconds)";
   private boolean nameHeapBases;
   private int timeoutSeconds = 20;
@@ -98,6 +99,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     options.registerOption(TIMEOUT, 20, null,
         "Maximum native decompiler time per function (1–300 seconds). "
             + "Timed-out functions are reported without inferred facts.");
+    options.registerOption(POOL_NAMES, true, null,
+        "Name unambiguous local pool loads using validated L2 slot references; does not fold snapshot values.");
     options.registerOption(HEAP_NAMES, false, null,
         "Name exact HBS << 32 expressions using native local symbols; no P-code replacement.");
   }
@@ -105,6 +108,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   @Override
   public void optionsChanged(Options options, Program program) {
     nameHeapBases = options.getBoolean(HEAP_NAMES, false);
+    namePoolValues = options.getBoolean(POOL_NAMES, true);
     timeoutSeconds = Math.max(1, Math.min(300, options.getInt(TIMEOUT, 20)));
   }
 
@@ -190,6 +194,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
           monitor.setMessage(current + ": saving references and names");
           links += save(program, function, facts);
           if (nameHeapBases) nameHeapBases(program, function, result.getHighFunction(), monitor);
+          if (namePoolValues) DartPoolReferences.nameValues(program, function, result.getHighFunction(), monitor);
           functions++;
           uses += facts.uses().size();
         } finally {
@@ -281,8 +286,6 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
    */
   private static void nameHeapBases(Program program, Function function, HighFunction high,
       TaskMonitor monitor) throws CancelledException {
-    var facts = read(program, function);
-    var names = new ArrayList<Named>(facts.names());
     var operations = high.getPcodeOps();
     while (operations.hasNext()) {
       monitor.checkCancelled();
@@ -296,37 +299,43 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
           || op.getInput(0).getSize() != 8
           || !op.getInput(0).getAddress().equals(program.getRegister("x28").getAddress())
           || !function.getBody().contains(op.getSeqnum().getTarget())) continue;
-      var dynamic = new DynamicHash(op.getOutput(), high);
-      if (dynamic.getHash() == 0 || dynamic.getAddress() == null) continue;
-      VariableStorage storage;
-      try {
-        storage = new VariableStorage(program,
-            AddressSpace.HASH_SPACE.getAddress(dynamic.getHash()), 8);
-      } catch (InvalidInputException e) {
-        continue;
-      }
-      int firstUse = (int) dynamic.getAddress().subtract(function.getEntryPoint());
-      boolean occupied = false;
+      nameExpression(program, function, high, op.getOutput(), "heap_base");
+    }
+  }
+
+  /** An owned native display name; neither a value substitution nor a type claim. */
+  static boolean nameExpression(Program program, Function function, HighFunction high,
+      Varnode value, String preferred) {
+    if (value == null || value.isInput() || value.getSize() != 8
+        || value.getHigh() instanceof ghidra.program.model.pcode.HighParam
+        || value.getHigh() instanceof ghidra.program.model.pcode.HighGlobal) return false;
+    var facts = read(program, function);
+    if (facts == null) return false;
+    var dynamic = new DynamicHash(value, high);
+    if (dynamic.getHash() == 0 || dynamic.getAddress() == null) return false;
+    try {
+      var storage = new VariableStorage(program, AddressSpace.HASH_SPACE.getAddress(dynamic.getHash()), 8);
       for (var local : function.getLocalVariables()) {
-        occupied |= local.getVariableStorage().equals(storage);
+        if (local.getVariableStorage().equals(storage)) return false;
       }
-      if (occupied) continue;
-      String name = "heap_base";
+      String name = preferred;
       for (int suffix = 1; program.getSymbolTable().getVariableSymbol(name, function) != null;
-          suffix++) name = "heap_base_" + suffix;
-      try {
-        var local = function.addLocalVariable(new LocalVariableImpl(
-            name, firstUse, UnsignedLongLongDataType.dataType,
-            storage, program), SourceType.ANALYSIS);
-        names.add(new Named(local.getSymbol().getID(), name,
-            program.getDataTypeManager().getID(local.getDataType()), dynamic.getHash(), firstUse));
-        program.getUsrPropertyManager().getStringPropertyMap(PROPERTY).add(function.getEntryPoint(),
-            JSON.toJson(new Facts(facts.uses(), facts.links(), names)));
-      } catch (InvalidInputException
-          | DuplicateNameException e) {
-        // Some optimized intermediates cannot be named by the native database.
-        // Their exact arithmetic remains available without a display hint.
+          suffix++) name = preferred + "_" + suffix;
+      int firstUse = (int) dynamic.getAddress().subtract(function.getEntryPoint());
+      var type = value.getHigh() == null ? null : value.getHigh().getDataType();
+      if (type == null || type.getLength() != value.getSize()) {
+        type = ghidra.program.model.data.Undefined8DataType.dataType;
       }
+      var local = function.addLocalVariable(new LocalVariableImpl(name, firstUse,
+          type, storage, program), SourceType.ANALYSIS);
+      var names = new ArrayList<Named>(facts.names());
+      names.add(new Named(local.getSymbol().getID(), name,
+          program.getDataTypeManager().getID(local.getDataType()), dynamic.getHash(), firstUse));
+      program.getUsrPropertyManager().getStringPropertyMap(PROPERTY).add(function.getEntryPoint(),
+          JSON.toJson(new Facts(facts.uses(), facts.links(), names)));
+      return true;
+    } catch (InvalidInputException | DuplicateNameException e) {
+      return false;
     }
   }
 

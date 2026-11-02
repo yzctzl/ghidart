@@ -16,7 +16,7 @@ Features:
 - PP-relative access and constant-use indexing, with references for proved concrete addresses and calls.
 - Finite indirect-jump recovery through native switch/SSA analysis and complete CFG checks.
 - Optional native heap-base expression names and explicit-length character data types.
-- Optional AOT snapshot decoding for function entries, explicit-length strings and scoped object-pool data (L2).
+- AOT snapshot decoding for function entries, explicit-length strings and scoped object-pool data (L2).
 - Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
 
 **Experimental: correctness and stability have not been comprehensively verified.**
@@ -45,7 +45,8 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
    language `AARCH64:LE:64:dart`, compiler `dart` (or `dart-r23` for Dart 2.13-era binaries
    with dedicated x23 heap base); choose the ARM64 slice for FAT files.
 2. Choose one initial boundary source:
-   - Supported snapshot, without b4a: run **Dart AOT Objects** (L2). It creates
+   - Supported snapshot, without b4a: keep **Dart AOT Objects** (L2) enabled during
+     Auto Analyze, or run it from One Shot. It creates
      functions and entry labels, strings, object relationships and scoped pools.
    - Matching `b4a.json`: run **Dart AOT Code Boundaries**, or leave this analyzer
      enabled during Auto Analyze. Place the JSON beside the binary or set its path.
@@ -62,7 +63,7 @@ L2 and b4a boundary import read their complete input, regardless of selection;
 selection limits the machine-code discovery and ABI/value analysis entry sets.
 L1/L2/b4a are not yet an automatic fallback chain. Choose a boundary source first,
 then run ABI analysis. A language **upgrade** updates the database's language model;
-it does not enable L2 or establish that the analysis passes have run.
+it does not rerun analysis or change saved analyzer options.
 
 Machine-code discovery and ABI analysis are disabled by default to avoid scanning
 mixed native code or decompiling the entire input during import. Incomplete control
@@ -112,25 +113,46 @@ scopes. Top-level functions belong to their library; known allocation/field stub
 to their class. Shared machine code keeps declaration labels in each owning scope
 and a single function body. **Dart → ObjectPools → isolate → pool_<id> → slots** opens the logical
 pool in Listing: comments show each PP offset, kind, initial value and patchability.
-Tagged slots link to logical objects and retained string payloads. These links describe
-snapshot values, not constants guaranteed after runtime mutation. Strings can be reached
-through object and pool references. Machine-code PP integration remains under development.
-Serialized string length/encoding
+Proved PP accesses link to those slots; direct string loads also link to the character
+data, so **Defined Strings → References** can lead back to code. These links describe
+snapshot values, not constants guaranteed after runtime mutation. Strings used only
+by metadata remain reachable through object references. Serialized string length/encoding
 prefixes are defined separately from their characters; they are not trailing garbage.
 These logical identities are not runtime heap addresses. Declaration relationships,
 types, logical signatures and decoded integers are retained as database properties;
 logical parameter counts do not replace machine-code ABI inference. Serialized
 object fields and byte spans are retained alongside these views. Adapted root layouts
-also retain named roots, static fields and dispatch Code indices as navigable database
-slots. Full version coverage and hash-independent format selection remain under development. Pool offsets
-alone do not identify an object or a string at a machine-code use site.
+also retain named roots, field value/offset references and static tables as navigable
+slots. Static fields link to their serialized initial values, including shared fields;
+these describe snapshot state, not values after runtime mutation. Types and instances
+link to their classes. Code objects and resolved dispatch entries link to their instruction entries;
+deferred targets remain unresolved until their loading unit is available. Function
+declarations retain their Code links even without a local body; `LazyCompile` is
+identified as a helper, not mislabeled as a compiled business function. Integer and
+double values are shown on logical identities and pool slots, with exact double bits.
+Fixed user-class layouts appear under **Data Type Manager → Dart → L2**. Field
+positions are converted from target words to bytes; tagged slots are not treated as
+native pointers, and unknown unboxed numeric types remain raw storage. Inherited fields
+use the retained superclass relationship. SDK-defined base identities such as null,
+bools and sentinels appear under **Dart → VM → BaseObjects**.
 
-L2 is disabled by default. Unknown formats, unadapted roots or invalid cluster data are rejected;
+Open a deferred `*-<id>.part.so`/`.dylib` with its root and ancestor units beside it.
+L2 reads parent reference tables temporarily, validates program identity and applies
+that unit's Code/pool patches. For other filenames set **Parent AOT file** to the
+immediate parent binary. Missing/wrong parents reject L2 without inventing addresses.
+**Dart Value Uses** can name unambiguous pool-load locals after ABI recovery; it
+preserves their inferred types and user edits. Names include available initial string/base-object
+hints, without folding mutable snapshot values.
+Hashes only suggest a reader: failed hints fall back to complete structural decoding,
+and conflicting interpretations are rejected. Full version coverage remains under
+development. Pool offsets alone do not identify an object or string at a code use site.
+
+L2 is enabled by default for new Dart imports. Unknown formats, unadapted roots or invalid cluster data are rejected;
 L1 remains independent. A successful run reports function-name, string and pool-slot counts
 and `Root stream fully consumed` in the console. `L2 rejected` means no L2 data was published.
 Repeating the same input is harmless. If published snapshot
 bytes or mappings change, L2 preserves the existing generation and rejects replacement;
-use a fresh import for the changed binary. Format profiles cover selected SDK layouts,
+use a fresh import for changed binaries or an older published fact generation. Format profiles cover selected SDK layouts,
 not every release between 2.10 and 3.13.
 
 Supported stack-check and write-barrier call sites receive local

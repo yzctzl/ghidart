@@ -657,7 +657,12 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       publishFunctionCodes(program, snapshot, anchor, monitor);
       program.getOptions(OWNER).setInt(codeOption, 1);
     }
-
+    String poolOption = OWNER + "." + snapshot.scope() + ".poolReferences";
+    if (program.getOptions(OWNER).getInt(poolOption, 0) != 2) {
+      int links = DartPoolReferences.publish(program, snapshot, anchor, monitor);
+      log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + links + " PP slot references.");
+      program.getOptions(OWNER).setInt(poolOption, 2);
+    }
   }
 
   /** Function/Code relationships also survive when no local body is available. */

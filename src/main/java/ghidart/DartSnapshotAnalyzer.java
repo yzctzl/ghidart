@@ -462,6 +462,9 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       facts.add(address, JSON.toJson(Map.of("kind", "Field", "object", field)));
       var storage = objects.fieldStorage(field);
       detail(facts, address, "storage", storage);
+      if (field.typeRefId > 0) {
+        reference(program, address, anchor.add((long) field.typeRefId * 8));
+      }
       if (storage.initialValueRef() != null && storage.initialValueRef() > 0) {
         reference(program, address, anchor.add(storage.initialValueRef() * 8L));
       }
@@ -643,6 +646,11 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       throws IOException, CancelledException {
     String option = OWNER + "." + snapshot.scope() + ".presentation";
     Address anchor = program.getMemory().getBlock("DartObjects_" + snapshot.scope()).getStart();
+    String semantics = OWNER + "." + snapshot.scope() + ".semanticFacts";
+    if (program.getOptions(OWNER).getInt(semantics, 0) != 1) {
+      publishSemanticFacts(program, snapshot, anchor, monitor);
+      program.getOptions(OWNER).setInt(semantics, 1);
+    }
     if (program.getOptions(OWNER).getInt(option, 0) != 7) {
       DartSnapshotSymbols.publish(program, snapshot, anchor, monitor, log);
       program.getOptions(OWNER).setInt(option, 7);
@@ -662,6 +670,48 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       int links = DartPoolReferences.publish(program, snapshot, anchor, monitor);
       log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + links + " PP slot references.");
       program.getOptions(OWNER).setInt(poolOption, 2);
+    }
+  }
+
+  /** Add validated semantic facts without reallocating published object identities.
+   * Parent facts use the child's logical anchor, not another file's addresses.
+   * Nearest loading-unit definitions win; no native user types are rewritten.
+   */
+  private static void publishSemanticFacts(Program program, Snapshot snapshot, Address anchor,
+      TaskMonitor monitor) throws CancelledException, IOException {
+    var facts = property(program);
+    var functions = new java.util.HashSet<Integer>();
+    var signatures = new java.util.HashSet<Integer>();
+    var instances = new java.util.HashSet<Integer>();
+    var fields = new java.util.HashSet<Integer>();
+    for (var scope = snapshot.objects(); scope != null;
+        scope = snapshot.objects().header.isLoadingUnit ? scope.vm : null) {
+      for (var function : scope.functionInfos) {
+        monitor.checkCancelled();
+        if (functions.add(function.refId())) {
+          detail(facts, anchor.add(function.refId() * 8L), "functionInfo", function);
+        }
+      }
+      for (var signature : scope.funcTypes) {
+        monitor.checkCancelled();
+        if (signatures.add(signature.refId)) {
+          detail(facts, anchor.add(signature.refId * 8L), "signature", signature);
+        }
+      }
+      for (var entry : scope.instanceSlots.entrySet()) {
+        monitor.checkCancelled();
+        if (!instances.add(entry.getKey())) continue;
+        Address address = anchor.add(entry.getKey() * 8L);
+        detail(facts, address, "instanceSlots", entry.getValue());
+        detail(facts, address, "immutable", scope.immutableInstances.contains(entry.getKey()));
+      }
+      for (var field : scope.fields) {
+        monitor.checkCancelled();
+        if (!fields.add(field.refId)) continue;
+        Address address = anchor.add(field.refId * 8L);
+        detail(facts, address, "object", field);
+        if (field.typeRefId > 0) reference(program, address, anchor.add(field.typeRefId * 8L));
+      }
     }
   }
 

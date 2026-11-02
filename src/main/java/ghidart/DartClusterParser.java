@@ -297,6 +297,7 @@ public final class DartClusterParser {
     public final int refId;
     public final int nameRefId;
     public final int ownerRefId;
+    public final int typeRefId;
     public final int kindBits;
     public final int hostOffsetOrRef;
     /** Legacy initial value, or a Smi carrying an offset/static field ID; not a byte offset. */
@@ -306,15 +307,30 @@ public final class DartClusterParser {
 
     public FieldInfo(int refId, int nameRefId, int ownerRefId, int kindBits,
         int valueOrOffsetRefId, long staticFieldId) {
+      this(refId, nameRefId, ownerRefId, -1, kindBits, valueOrOffsetRefId, staticFieldId);
+    }
+
+    public FieldInfo(int refId, int nameRefId, int ownerRefId, int typeRefId, int kindBits,
+        int valueOrOffsetRefId, long staticFieldId) {
       this.refId = refId;
       this.nameRefId = nameRefId;
       this.ownerRefId = ownerRefId;
+      this.typeRefId = typeRefId;
       this.kindBits = kindBits;
       this.hostOffsetOrRef = ((kindBits >>> 1) & 1) != 0 ? -1 : valueOrOffsetRefId;
       this.valueOrOffsetRefId = valueOrOffsetRefId;
       this.staticFieldId = staticFieldId;
     }
+
+    public boolean isConst() { return (kindBits & 1) != 0; }
+    public boolean isStatic() { return ((kindBits >>> 1) & 1) != 0; }
+    public boolean isFinal() { return ((kindBits >>> 2) & 1) != 0; }
   }
+
+  public record InstanceSlot(long byteOffset, int targetRef, Long unboxed) {}
+
+  public record FunctionInfo(int refId, int nameRefId, int ownerRefId, int signatureRefId,
+      int kind, boolean isStatic, boolean hasThis, String role) {}
 
   /** Snapshot storage only: a static initial value can change after loading. */
   public record FieldStorage(boolean isStatic, boolean shared, Long offsetOrId,
@@ -460,6 +476,9 @@ public final class DartClusterParser {
     public final RootData roots;
     public final int totalAllocatedRefs;
     public final List<String> diagnostics;
+    public final Map<Integer, List<InstanceSlot>> instanceSlots;
+    public final Set<Integer> immutableInstances;
+    public final List<FunctionInfo> functionInfos;
 
     // Resolved lookup tables
     public final Map<Integer, String> stringByRef;
@@ -496,6 +515,35 @@ public final class DartClusterParser {
         int totalAllocatedRefs,
         List<String> diagnostics,
         Result vmResult) {
+      this(header, profile, clusters, objects, exceptionEntries, strings, namedObjects,
+          funcTypes, types, classes, fields, codes, poolEntries, mintValues, fillStartOffset,
+          fillEndOffset, roots, totalAllocatedRefs, diagnostics, vmResult, Map.of(), Set.of(), List.of());
+    }
+
+    public Result(
+        DartSnapshotHeader header,
+        DartVersionProfile profile,
+        List<ClusterMeta> clusters,
+        List<ObjectData> objects,
+        Map<Integer, List<Integer>> exceptionEntries,
+        List<ParsedString> strings,
+        List<NamedObject> namedObjects,
+        List<FuncTypeInfo> funcTypes,
+        List<TypeInfo> types,
+        List<ClassInfo> classes,
+        List<FieldInfo> fields,
+        List<CodeEntry> codes,
+        List<PoolEntry> poolEntries,
+        Map<Integer, Long> mintValues,
+        int fillStartOffset,
+        int fillEndOffset,
+        RootData roots,
+        int totalAllocatedRefs,
+        List<String> diagnostics,
+        Result vmResult,
+        Map<Integer, List<InstanceSlot>> instanceSlots,
+        Set<Integer> immutableInstances,
+        List<FunctionInfo> functionInfos) {
       this.vm = vmResult;
       this.header = header;
       this.profile = profile;
@@ -533,6 +581,9 @@ public final class DartClusterParser {
       this.roots = roots;
       this.totalAllocatedRefs = totalAllocatedRefs;
       this.diagnostics = Collections.unmodifiableList(diagnostics);
+      this.instanceSlots = Map.copyOf(instanceSlots);
+      this.immutableInstances = Set.copyOf(immutableInstances);
+      this.functionInfos = List.copyOf(functionInfos);
 
       Map<Integer, String> sMap = new HashMap<>(strings.size() * 2);
       for (ParsedString ps : strings) {
@@ -1173,6 +1224,9 @@ public final class DartClusterParser {
     List<FieldInfo> fields = new ArrayList<>();
     List<CodeEntry> codes = new ArrayList<>();
     List<PoolEntry> poolEntries = new ArrayList<>();
+    List<FunctionInfo> functionInfos = new ArrayList<>();
+    Map<Integer, List<InstanceSlot>> instanceSlots = new HashMap<>();
+    Set<Integer> immutableInstances = new HashSet<>();
     Map<Integer, List<Integer>> exceptionEntries = new HashMap<>();
 
     int fillEnd = fillStart;
@@ -1208,6 +1262,9 @@ public final class DartClusterParser {
               fields,
               codes,
               poolEntries,
+              functionInfos,
+              instanceSlots,
+              immutableInstances,
               exceptionEntries,
               objects);
         } catch (IOException e) {
@@ -1252,7 +1309,10 @@ public final class DartClusterParser {
         roots,
         totalAllocatedRefs,
         diags,
-        vmResult);
+        vmResult,
+        instanceSlots,
+        immutableInstances,
+        functionInfos);
   }
 
   /**
@@ -2155,6 +2215,9 @@ public final class DartClusterParser {
       List<FieldInfo> fields,
       List<CodeEntry> codes,
       List<PoolEntry> poolEntries,
+      List<FunctionInfo> functionInfos,
+      Map<Integer, List<InstanceSlot>> instanceSlots,
+      Set<Integer> immutableInstances,
       Map<Integer, List<Integer>> exceptionEntries,
       List<ObjectData> objects)
       throws IOException {
@@ -2192,7 +2255,7 @@ public final class DartClusterParser {
         }
         break;
       case REFS:
-        readFillRefs(s, cm, spec, u, profile, namedObjects, funcTypes, types, fields, objects);
+        readFillRefs(s, cm, spec, u, profile, namedObjects, funcTypes, types, fields, functionInfos, objects);
         break;
       case DOUBLE:
         for (long i = 0; i < cm.count; i++) {
@@ -2309,7 +2372,7 @@ public final class DartClusterParser {
         break;
       case INSTANCE:
         readFillInstance(s, cm, u, profile.compressedPointers, profile.preCanonicalSplit,
-            classes, objects);
+            classes, instanceSlots, immutableInstances, objects);
         break;
       case RECORD:
         for (long i = 0; i < cm.count; i++) {
@@ -2498,6 +2561,7 @@ public final class DartClusterParser {
       List<FuncTypeInfo> funcTypesOut,
       List<TypeInfo> typesOut,
       List<FieldInfo> fieldsOut,
+      List<FunctionInfo> functionInfosOut,
       List<ObjectData> objects)
       throws IOException {
     boolean isTypeCluster = (cm.cid == profile.cids.type);
@@ -2528,9 +2592,15 @@ public final class DartClusterParser {
         if (spec.isFuncType && si == 1) {
           int packed = s.readTagged32();
           capturedScalars[si] = packed;
-          boolean hasImplicit = (packed & 1) != 0;
-          int numFixed = (packed >>> 2) & 0x3fff;
-          int numOptional = (packed >>> 16) & 0x3fff;
+          // 2.12/2.13 combine parent type counts with parameter counts.
+          // 2.14 splits them into separate scalars (raw_object.h FunctionType).
+          int implicitBit = profile.funcTypeOldScalars
+              ? (profile.dartVersion.startsWith("2.12.") ? 9 : 8) : 0;
+          boolean hasImplicit = ((packed >>> implicitBit) & 1) != 0;
+          int numFixed = profile.funcTypeOldScalars ? (packed >>> 10) & 0x3ff
+              : (packed >>> 2) & 0x3fff;
+          int numOptional = profile.funcTypeOldScalars ? (packed >>> 20) & 0x3ff
+              : (packed >>> 16) & 0x3fff;
           if (hasImplicit && numFixed > 0) {
             numFixed--;
           }
@@ -2543,8 +2613,9 @@ public final class DartClusterParser {
           capturedScalars[si] = hostOff;
           capturedRefs = java.util.Arrays.copyOf(capturedRefs, capturedRefs.length + 1);
           capturedRefs[capturedRefs.length - 1] = hostOff;
+          int typeRef = capturedRefs.length > 2 ? capturedRefs[2] : -1;
           fieldsOut.add(
-              new FieldInfo(ref, nameRef, ownerRef, fieldKindBits, hostOff, -1));
+              new FieldInfo(ref, nameRef, ownerRef, typeRef, fieldKindBits, hostOff, -1));
         } else if (cm.cid == profile.cids.function && si == 0
             && profile.codeTextOffsetDelta) {
           // Legacy Function serializes a Code reference here. InstructionsTable
@@ -2571,8 +2642,47 @@ public final class DartClusterParser {
       if (spec.nameIdx >= 0) {
         namedOut.add(new NamedObject(cm.cid, ref, nameRef, ownerRef, sigRef));
       }
+      if (cm.cid == profile.cids.function && capturedScalars.length > 0) {
+        long kindTag = capturedScalars[capturedScalars.length - 1];
+        var layout = functionLayout(profile);
+        int kind = (int) (kindTag & 0x1f);
+        var kinds = FunctionLayouts.ALL.getAsJsonObject("groups").getAsJsonArray(
+            layout.get("functionKinds").getAsString());
+        if (kind >= kinds.size()) throw new IOException("unknown Function kind: " + kind);
+        String role = kinds.get(kind).getAsString();
+        boolean isStatic = ((kindTag >>> layout.get("functionStaticBit").getAsInt()) & 1) != 0;
+        boolean hasThis = !isStatic && switch (role) {
+          case "RegularFunction", "GetterFunction", "SetterFunction", "Constructor",
+              "ImplicitGetter", "ImplicitSetter", "FieldInitializer", "MethodExtractor",
+              "NoSuchMethodDispatcher", "InvokeFieldDispatcher", "DynamicInvocationForwarder",
+              "RecordFieldGetter" -> true;
+          default -> false;
+        };
+        functionInfosOut.add(new FunctionInfo(ref, nameRef, ownerRef, sigRef, kind, isStatic, hasThis, role));
+      }
       ref++;
     }
+  }
+
+  private static final class FunctionLayouts {
+    static final com.google.gson.JsonObject ALL = load();
+    private static com.google.gson.JsonObject load() {
+      try (var input = DartClusterParser.class.getResourceAsStream("/ghidart/snapshot-roots.json")) {
+        if (input == null) throw new IOException("missing SDK function descriptors");
+        return com.google.gson.JsonParser.parseReader(new java.io.InputStreamReader(
+            input, StandardCharsets.UTF_8)).getAsJsonObject();
+      } catch (IOException e) {
+        throw new IllegalStateException("Cannot read SDK function descriptors", e);
+      }
+    }
+  }
+
+  private static com.google.gson.JsonObject functionLayout(DartVersionProfile profile) throws IOException {
+    var layout = FunctionLayouts.ALL.getAsJsonObject("layouts").getAsJsonObject(profile.dartVersion);
+    if (layout == null || !layout.has("functionKinds")) {
+      throw new IOException("missing Function role layout: " + profile.dartVersion);
+    }
+    return layout;
   }
 
   private static long readScalar(DartStream s, ScalarOp op) throws IOException {
@@ -2696,7 +2806,8 @@ public final class DartClusterParser {
       objects.add(new ObjectData(ref, cm.cid, allRefs,
           new long[] {kindBits, valOrOff, fieldId}, -1, 0));
       namedOut.add(new NamedObject(cm.cid, ref, nameRef, ownerRef, -1));
-      fieldsOut.add(new FieldInfo(ref, nameRef, ownerRef, kindBits, valOrOff, fieldId));
+      int typeRef = refs.length > 2 ? refs[2] : -1;
+      fieldsOut.add(new FieldInfo(ref, nameRef, ownerRef, typeRef, kindBits, valOrOff, fieldId));
       ref++;
     }
   }
@@ -2899,6 +3010,7 @@ public final class DartClusterParser {
   /** Preserve pointer fields and unboxed word pairs using the SDK field bitmap. */
   private static void readFillInstance(DartStream s, ClusterMeta cm, boolean u,
       boolean compressedPointers, boolean preCanonicalSplit, List<ClassInfo> classes,
+      Map<Integer, List<InstanceSlot>> instanceSlots, Set<Integer> immutableInstances,
       List<ObjectData> objects) throws IOException {
     long bitmap = 0;
     if (preCanonicalSplit) {
@@ -2910,27 +3022,39 @@ public final class DartClusterParser {
     } else {
       bitmap = s.readUnsigned();
     }
+    int wordBytes = compressedPointers ? 4 : 8;
     int headerWords = compressedPointers ? 2 : 1;
     int fields = cm.nextFieldOffsetInWords - headerWords;
     if (fields < 0 || fields > MAX_STEPS) throw new IOException("invalid instance field extent");
     for (int i = 0; i < cm.count; i++) {
       int canonical = preCanonicalSplit ? s.readUint8() : -1;
+      boolean isImmutable = cm.isCanonical || cm.isImmutable || (canonical > 0);
+      int refId = cm.startRef + i;
+      if (isImmutable) immutableInstances.add(refId);
       var refs = new ArrayList<Integer>();
       var scalars = new ArrayList<Long>();
       scalars.add(bitmap);
       scalars.add((long) cm.nextFieldOffsetInWords);
       scalars.add((long) cm.instanceSizeInWords);
       if (preCanonicalSplit) scalars.add((long) canonical);
+      var slots = new ArrayList<InstanceSlot>();
       for (int j = 0; j < fields; j++) {
         int word = headerWords + j;
+        long byteOffset = (long) word * wordBytes;
         if (word < 64 && ((bitmap >>> word) & 1) != 0) {
-          scalars.add((long) s.readTagged32());
-          scalars.add((long) s.readTagged32());
+          long low = s.readTagged32() & 0xffffffffL;
+          long high = s.readTagged32() & 0xffffffffL;
+          scalars.add(low);
+          scalars.add(high);
+          slots.add(new InstanceSlot(byteOffset, -1, low | (high << 32)));
         } else {
-          refs.add((int) s.readRef(u));
+          int ref = (int) s.readRef(u);
+          refs.add(ref);
+          slots.add(new InstanceSlot(byteOffset, ref, null));
         }
       }
-      objects.add(new ObjectData(cm.startRef + i, cm.cid,
+      instanceSlots.put(refId, List.copyOf(slots));
+      objects.add(new ObjectData(refId, cm.cid,
           refs.stream().mapToInt(Integer::intValue).toArray(),
           scalars.stream().mapToLong(Long::longValue).toArray(), -1, 0));
     }

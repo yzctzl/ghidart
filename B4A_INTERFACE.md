@@ -146,11 +146,18 @@ ID and grouped function bodies/aliases. It contains no additional analysis facts
 Thread/ObjectPool and operand records are no longer redundantly copied into it.
 Legacy `script_data.json` can still be supplied manually to regenerate older scripts.
 
-Ghidra reads `b4a.json` directly. The accompanying `ImportB4a.java` streams past
-large analysis sections, verifies the original image and imports ARM64 entry labels
-and range bookmarks transactionally. It preserves user symbols, rejects overlapping
-ranges in this initial importer, and does not yet create function bodies or import
-types/IL. Compile checks are not GUI/runtime acceptance.
+Ghidart reads `b4a.json` directly through **Dart b4a Import** (L3). It verifies
+original image identity and loaded RVA checks, applies Code boundaries, then streams
+semantic records into native namespaces, raw layouts, comments and logical slot
+references. Full declarations and aliases are retained in `ghidart.b4a` properties;
+**Dart → Show b4a Records** displays them. Logical slots live in non-loaded
+`B4aMetadata` memory in `OTHER`, never at invented runtime heap addresses.
+
+Printed types/IL and pool descriptions remain presentation evidence. They are not
+parsed into replacement P-code, physical call contracts, string addresses or host
+pointers. Ghidart's ABI analysis remains independent. Imports are transactional,
+preserve user edits, skip identical generations, and reject changed generations
+without replacing published data. The former `ImportB4a.java` script is retired.
 
 Consumers may stream sections or create local indexes. Unknown optional fields may
 be ignored. Incompatible meaning/type changes require a new `version`; unknown

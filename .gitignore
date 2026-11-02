@@ -15,10 +15,8 @@
 /gradle.properties
 
 # Local application fixtures and analysis exports; carry them when migrating.
-/samples/*/
-/tests/*
-!/tests/VerifyB4a.java
-!/tests/VerifyDartLanguage.java
+/samples/
+/tests/
 
 # Local research notes and validation material.
 /local/

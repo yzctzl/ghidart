@@ -16,11 +16,12 @@ Dart AOT 的 Ghidra 扩展，目前支持 ARM64。
 - 复用原生 switch／SSA 分析，经过完整 CFG 校验后恢复有限间接跳转。
 - 可选原生堆基址表达式命名及明确长度的字符数据类型。
 - 可选解析 AOT 快照，恢复函数入口、明确长度的字符串和按池区分的对象池数据（L2）。
-- 可选读取配套 `b4a.json`，校验二进制身份和映射后导入代码边界及多入口标签。
+- 可选 b4a 集成（L3）：从统一 `b4a.json` 导入边界、分层类/函数名、原始字段布局、
+  Thread/池槽位、操作数引用和已识别 IL 注释。
 
 **仍是实验项目，正确性与稳定性尚未经过全面验证。** 未知间接跳转、SDK 或调用约定保留为未知。
 通用 native/FFI、动态栈上的活跃 Runtime 返回值和实机调试尚未完整支持或验收。
-b4a 的类、名称、对象池和高级分析数据尚未完整导入。
+b4a 打印的类型和 IL 作为导出证据显示，不直接转换为物理 ABI 或替换 P-code。
 
 ## 安装
 
@@ -44,17 +45,17 @@ export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.2_PUBLIC
    - 快照格式受支持、没有 b4a 数据：在 Auto Analyze 中保持 **Dart AOT Objects**（L2）开启，
      或通过 One Shot 执行，创建函数、
      入口标签、字符串、对象关系和按池区分的数据。
-   - 有匹配的 `b4a.json`：执行 **Dart AOT Code Boundaries**，或在 Auto Analyze 中
-     保持该项开启。JSON 放在二进制旁，也可指定路径。目前只导入边界和入口标签，
-     尚未导入全部 b4a 语义。
+   - 有匹配的 `b4a.json`：二进制旁存在配套 JSON 时，默认启用 **Dart b4a Import**（L3）。
+     仍可关闭、通过 One Shot 手动执行，或在分析选项中指定 **b4a.json path**。它同时创建边界；
+     **Dart AOT Code Boundaries** 仍可用于只导入边界。
    - 快照不可读或经过自定义修改：选中 managed 可执行区域，执行
      **Dart Machine Code Functions**（L1）；必要时通过 **Confirmed entry addresses** 补充入口。
 3. 选中关注的函数，执行 **Dart ABI**，然后打开反编译窗口。
    L2 或 b4a 提供边界后，仍需执行 ABI 恢复。
 4. ABI 恢复后，可选执行 **Dart Value Uses**。
 
-Dart 语言下，这五项均可通过 **Analysis → One Shot** 执行。
-L2 和 b4a 边界导入始终读取完整输入，不受选区限制；选区用于限定机器码发现范围
+Dart 语言下，这六项均可通过 **Analysis → One Shot** 执行。
+L2 和 b4a 导入始终读取完整输入，不受选区限制；选区用于限定机器码发现范围
 和 ABI／值分析的起始函数集合。L2 无法解析新输入时，可在独立确认边界的指令图像内
 自动执行 L1 函数发现；没有可靠边界时，需要手动选择托管代码范围。
 拒绝解析时保留已有 L2 数据；b4a 导入和 ABI 分析仍需显式执行。
@@ -75,7 +76,7 @@ L1 ABI 分析依据机器码，不依赖快照 hash 或 Thread 布局配置。
 ABI 恢复后，可选对选中函数运行 **Dart Value Uses**。它逐个反编译选中函数，全库运行
 可能耗时较长。任务进度显示当前函数、阶段和完成数量；单函数反编译超时默认 20 秒，
 可在选项中调整，结束汇总包含失败和超时数量。该分析将 PP 来源、字节偏移、访问宽度
-和常量用途保存到数据库。运行 `ShowDartValueUses.java` 可在 Console 查询。
+和常量用途保存到数据库。通过 **Dart → Show Value Uses** 可在 Console 查询。
 具体地址引用使用 Ghidra 原生导航；PP 偏移本身不代表池条目或字符串。
 修改代码或签名后需要重新分析。该分析默认关闭。
 
@@ -88,7 +89,7 @@ ABI 恢复后，可选对选中函数运行 **Dart Value Uses**。它逐个反�
 保留 NUL 及 UTF-16 码元；原始 UTF-16 码元通过 Bytes 编辑。这些类型不发现 Dart
 对象，也不猜测长度或编码。原生反编译器内联字符指针时仍遵循 C 字符串规则，
 不能完整内联包含中间 NUL 的内容。
-在已定义的字符数据或引用它的指令上运行 **ShowDartCharacters.java**，可在控制台查看
+在已定义的字符数据或引用它的指令上选择 **Dart → Show Characters**，可在控制台查看
 完整内容、地址、字节长度和转义码元。该视图保留 NUL 和孤立代理码元，不改变反编译语义。
 对支持的快照，可在 **Dart ABI** 前执行 **Dart AOT Objects**。
 这个 L2 分析器独立读取映射中的快照符号，不依赖 b4a；创建函数边界及多入口标签，
@@ -125,7 +126,7 @@ ABI 恢复后，**Dart Value Uses** 可为明确对应的池加载局部变量�
 链接到保留的 Field 声明，包括继承字段，生成的局部变量带出类名／字段名。
 整个 SSA 局部变量能证明持有同一 Class 的完整 tagged 指针时，使用 Ghidra 原生的
 偏移指针类型显示 `ADJ(obj)->field`；压缩值仍保留为整数。
-`ShowDartValueUses.java` 可查看对象、实参和返回值的来源。
+**Dart → Show Value Uses** 可查看对象、实参和返回值的来源。
 未知调用、歧义值或缺失声明会停止传播，不将逻辑签名替换为物理 ABI。
 hash 只提供候选读取器：匹配失败后回退到完整结构解码，互相矛盾的解读会被拒绝。
 完整版本覆盖仍在实现中。仅凭池偏移仍不能确定代码访问点对应哪个对象或字符串。
@@ -139,6 +140,31 @@ hash 只提供候选读取器：匹配失败后回退到完整结构解码，互
 
 为支持的栈检查和写屏障调用点建立局部契约；直接 shared helper 还需要验证保存、恢复和结果槽。
 无法确定目标地址的间接调用保留原样。L2/L3 元数据可提供更强的信息。
+
+## b4a 集成（L3）
+
+对配套的 ARM64 ELF 或 Mach-O 执行 **Analysis → One Shot → Dart b4a Import**。
+二进制旁存在配套 JSON 时默认启用；已保存的分析选项优先，仍可手动通过 One Shot 执行。
+原始文件身份和加载后的 RVA 校验必须一致。
+导入使用事务，取消或失败时回滚；相同文档重复执行会跳过。不同文档需要新数据库，
+避免静默替换已有用户修改。
+大导出文件可能需要数分钟及磁盘临时空间；较小的内存 `/tmp` 可能耗尽。
+需要时在启动 Ghidra 前设置 Java 参数 `-Djava.io.tmpdir=/path/on/disk`。
+
+通过 **Symbol Tree → B4a → Libraries** 查看库、类和声明层级，
+通过 **B4a → Structures** 查看导出的 Thread/ObjectPool 槽位，
+通过 **Data Type Manager → Dart → B4a** 查看布局。物理函数保持单一所有者；
+共享代码的多个声明分别保留并建立链接。用户名称、注释、签名、类型和操作数引用受到保护。
+已识别 IL 和注释放在对应指令旁；完整记录（参数、签名、标志、未知 IL 等）保存在数据库属性中，
+在函数或槽位处选择 **Dart → Show b4a Records** 可以查看。
+
+若没有 Dart 菜单，在 **File → Configure** 中启用 **DartViewsPlugin**。
+三个原生动作替代旧脚本，不再需要配置 Script Manager。
+
+导出的池描述作为不透明文本保留，不将正文中的地址当作指针，不猜字符串位置，
+也不折叠可变池值。已解析的操作数引用指向 `B4aMetadata`（`OTHER`）中的导出逻辑槽位，
+不是运行时堆地址。L2 能解析快照时仍独立提供真实字符串数据和对象关系。
+逻辑 Dart 类型/签名不替代机器 ABI，反编译前仍照常执行 **Dart ABI**。
 
 ## 兼容性
 
@@ -160,9 +186,9 @@ SDK 源码检查覆盖 30 个发布标签；真实二进制验证覆盖部分版
 
 - `analysis/`：函数发现、ABI、值／对象使用分析及 P-code 注入。
 - `snapshot/`：L2 格式配置、解码、对象、类型与数据库发布。
-- `importer/`：ELF 装载及可选的 b4a Code 边界导入。
+- `importer/`：ELF 装载、b4a 校验与语义导入。
 - `datatype/`：显式长度的字符数据类型。
-- `listing/`：兼容已保存布局的操作数字段。
+- `listing/`：原生 Console 动作及兼容已保存布局的操作数字段。
 
 共享日志位于 `analysis/`；迁移的字符和操作数字段类通过 Ghidra 原生类名映射兼容已有数据库和布局。
 
@@ -171,15 +197,9 @@ SDK 源码检查覆盖 30 个发布标签；真实二进制验证覆盖部分版
 有符号字运算，保留指令编码和寄存器存储，无需维护另一份指令集。
 b4a 数据格式见 [B4A_INTERFACE.md](B4A_INTERFACE.md)。
 
-原有轻量验证器位于 `tests/`；本地应用样例和大型实测材料不进入发布包。
-准备好二进制与 `b4a.json` 样例后，可运行离线身份校验：
-
-```sh
-./gradlew --no-daemon verifySamples -PsamplesDir=/path/to/samples
-```
-
-样例目录结构见 [samples/README.md](samples/README.md)。校验通过不代表已执行 Ghidra 分析。
-许可与模板来源见 [LICENSE](LICENSE)。
+样例和验证工具仅保留在本地，不进入 Git 或扩展包。本地存在 `tests/VerifyB4a.java` 时，
+可运行 `./gradlew --no-daemon verifySamples -PsamplesDir=/path/to/samples` 校验
+二进制与 JSON 身份；这不代表已执行 Ghidra 分析。许可与模板来源见 [LICENSE](LICENSE)。
 
 文档默认使用英文。修改本 README 或 [README.md](README.md) 时，必须同步更新另一版本。
 接口、样例和测试说明仅维护英文。

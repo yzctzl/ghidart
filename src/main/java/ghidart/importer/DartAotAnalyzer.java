@@ -135,7 +135,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     }
   }
 
-  private Optional<Path> findMetadata(Program program) {
+  public Optional<Path> findMetadata(Program program) {
     if (!configuredMetadataPath.isEmpty()) {
       return Optional.of(Path.of(configuredMetadataPath).toAbsolutePath().normalize());
     }
@@ -157,7 +157,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     return Files.isRegularFile(named) ? Optional.of(named) : Optional.empty();
   }
 
-  private static void verifyIdentity(Program program, DartCodeIndex index) throws IOException {
+  public static void verifyIdentity(Program program, DartCodeIndex index) throws IOException {
     String executablePath = program.getExecutablePath();
     Path executable =
         executablePath == null || executablePath.isBlank()

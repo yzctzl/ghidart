@@ -17,13 +17,14 @@ Features:
 - Finite indirect-jump recovery through native switch/SSA analysis and complete CFG checks.
 - Optional native heap-base expression names and explicit-length character data types.
 - AOT snapshot decoding for function entries, explicit-length strings and scoped object-pool data (L2).
-- Optional `b4a.json` import of code boundaries and alternate-entry labels after checking binary identity and mappings.
+- Optional b4a integration (L3): code boundaries, scoped class/function names, raw field layouts,
+  Thread/pool slots, operand references and recovered IL comments from one `b4a.json`.
 
 **Experimental: correctness and stability have not been comprehensively verified.**
 Unknown indirect branches, SDKs and calling conventions remain unknown.
 General native/FFI support, live Runtime returns on dynamic stacks and on-device
-debugging are not fully supported or validated. Import of b4a classes, names,
-object pools and higher-level analysis is also incomplete.
+debugging are not fully supported or validated. b4a printed types and IL are displayed
+as exported evidence, not translated into physical ABI or replacement P-code.
 
 ## Installation
 
@@ -48,9 +49,10 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
    - Supported snapshot, without b4a: keep **Dart AOT Objects** (L2) enabled during
      Auto Analyze, or run it from One Shot. It creates
      functions and entry labels, strings, object relationships and scoped pools.
-   - Matching `b4a.json`: run **Dart AOT Code Boundaries**, or leave this analyzer
-     enabled during Auto Analyze. Place the JSON beside the binary or set its path.
-     This currently imports boundaries and entry labels, not all b4a semantics.
+   - Matching `b4a.json`: **Dart b4a Import** (L3) is enabled by default when a sidecar
+     exists beside the binary. You can disable it, run it from One Shot, or set
+     **b4a.json path** in its analyzer options. It also creates boundaries;
+     **Dart AOT Code Boundaries** remains available for boundaries alone.
    - Unreadable/custom snapshot: select the managed executable region and run
      **Dart Machine Code Functions** (L1). Add known entries through
      **Confirmed entry addresses** if needed.
@@ -58,8 +60,8 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
    ABI recovery is still required after L2 or b4a supplies boundaries.
 4. Optionally run **Dart Value Uses** after ABI recovery.
 
-All five actions are available under **Analysis → One Shot** for the Dart language.
-L2 and b4a boundary import read their complete input, regardless of selection;
+All six analyzers are available under **Analysis → One Shot** for the Dart language.
+L2 and b4a import read their complete input, regardless of selection;
 selection limits the machine-code discovery and ABI/value analysis entry sets.
 When L2 cannot decode a new input, it can run L1 discovery inside an independently
 bounded instruction image. Without that boundary, select the managed region explicitly.
@@ -88,7 +90,7 @@ The task monitor shows the current function, stage and completed count. The
 per-function decompiler timeout defaults to 20 seconds and is configurable;
 the final summary includes failures and timeouts.
 It saves PP origins, byte offsets, access widths and constant uses in the database.
-Run `ShowDartValueUses.java` to print them in the Console. Concrete references appear
+Choose **Dart → Show Value Uses** to print them in the Console. Concrete references appear
 in normal Ghidra navigation; PP offsets alone do not identify pool entries or strings.
 Rerun the analysis after changing code or signatures. It is disabled by default.
 
@@ -103,7 +105,7 @@ range through the Data Type Manager. These types preserve NULs and UTF-16 code
 units in the database/Listing; edit raw UTF-16 units in Bytes. They do not discover
 Dart objects or infer lengths/encodings. The stock decompiler still uses C-string
 rules when inlining a character pointer: embedded NUL content is not fully inlined.
-Run **ShowDartCharacters.java** on typed data or an instruction referencing it to
+Choose **Dart → Show Characters** on typed data or an instruction referencing it to
 print the full payload, address, byte length and escaped code units in the console.
 This view preserves NULs and lone surrogates without changing decompiler semantics.
 For supported snapshots, optionally run **Dart AOT Objects** before **Dart ABI**.
@@ -151,7 +153,7 @@ through SSA copies and unambiguous merges. Exact field accesses link to retained
 Field declarations, including inherited fields; generated locals carry class/field
 names. Whole SSA locals proved to hold one full-width tagged Class use Ghidra's
 native shifted-pointer type (`ADJ(obj)->field`); compressed values remain integers.
-`ShowDartValueUses.java` reports object, argument and return provenance.
+**Dart → Show Value Uses** reports object, argument and return provenance.
 Unknown calls, ambiguous values and missing declarations stop this propagation;
 logical signatures are not substituted for the physical ABI.
 Hashes only suggest a reader: failed hints fall back to complete structural decoding,
@@ -169,6 +171,37 @@ not every release between 2.10 and 3.13.
 Supported stack-check and write-barrier call sites receive local
 contracts; direct shared helpers require matching saves, restores and result slots.
 Unresolved indirect destinations remain indirect. L2/L3 metadata can add stronger facts.
+
+## b4a integration (L3)
+
+Run **Analysis → One Shot → Dart b4a Import** on a matching ARM64 ELF or Mach-O.
+A sidecar beside the binary enables it by default; saved analyzer choices take precedence.
+Manual One Shot execution remains available. The original file identity and
+loaded RVA checks must agree. Import is transactional; cancellation or failure rolls
+back its changes. The same document is skipped on repeat. A different document
+requires a fresh database so existing user changes are not silently replaced.
+Large exports may take minutes and need disk-backed temporary space; a small
+RAM-backed `/tmp` can fill. Set Java's `-Djava.io.tmpdir=/path/on/disk` before
+starting Ghidra when needed.
+
+Browse **Symbol Tree → B4a → Libraries** for library/class/declaration scopes,
+**B4a → Structures** for exported Thread/ObjectPool slots, and
+**Data Type Manager → Dart → B4a** for layouts. Physical functions keep one owner;
+all declarations, including aliases sharing code, remain separate linked records.
+User names, comments, signatures, types and operand references are preserved.
+Recognized IL and annotations appear beside their instructions. Full records,
+including parameters, signatures, flags and unrecognized IL, remain in database
+properties and can be read with **Dart → Show b4a Records** at a function or slot.
+
+Enable **DartViewsPlugin** under **File → Configure** if the Dart menu is absent.
+Its three actions replace the old scripts; no Script Manager setup is needed.
+
+Exported pool descriptions are opaque text. The importer does not turn embedded
+addresses into pointers, guess string byte locations or fold mutable pool values.
+Resolved operand references lead to exported logical slots in `B4aMetadata` (`OTHER`),
+not runtime heap addresses. L2 independently provides actual string data and object
+relationships when it can decode the snapshot. Logical Dart types/signatures do not
+override the machine ABI; run **Dart ABI** as usual before decompilation.
 
 ## Compatibility
 
@@ -191,9 +224,9 @@ Sources are organized under `src/main/java/ghidart/`:
 
 - `analysis/`: function discovery, ABI, value/object uses and P-code injection.
 - `snapshot/`: L2 format profiles, decoding, objects, types and database publication.
-- `importer/`: ELF loading and optional b4a Code boundary import.
+- `importer/`: ELF loading, b4a validation and semantic import.
 - `datatype/`: explicit-length character data types.
-- `listing/`: the operand field retained for saved layout compatibility.
+- `listing/`: native Console actions and the operand field retained for saved layouts.
 
 Shared logging lives in `analysis/`. Moved character and operand classes register
 Ghidra class-name translations for existing databases and layouts.
@@ -204,17 +237,11 @@ macro. A small SLEIGH wrapper exposes equivalent signed-word arithmetic; it keep
 instruction encodings and register storage unchanged.
 See [B4A_INTERFACE.md](B4A_INTERFACE.md) for the b4a data format.
 
-The original lightweight verifiers are in `tests/`. Local application samples and
-large validation materials are excluded from the release package. With matching
-binaries and `b4a.json` samples available, run offline identity checks:
-
-```sh
-./gradlew --no-daemon verifySamples -PsamplesDir=/path/to/samples
-```
-
-See [samples/README.md](samples/README.md) for the directory layout. Passing these
-checks does not mean Ghidra analysis has run. See [LICENSE](LICENSE) for licensing
-and template attribution.
+Samples and verification tools are local development materials, excluded from Git
+and extension packages. When `tests/VerifyB4a.java` is available locally,
+`./gradlew --no-daemon verifySamples -PsamplesDir=/path/to/samples` checks paired
+binary/JSON identities without running Ghidra analysis. See [LICENSE](LICENSE)
+for licensing and template attribution.
 
 English is the default documentation language. Keep this README and
 [README.zh-CN.md](README.zh-CN.md) synchronized whenever either changes.

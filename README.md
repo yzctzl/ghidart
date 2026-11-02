@@ -61,8 +61,10 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
 All five actions are available under **Analysis → One Shot** for the Dart language.
 L2 and b4a boundary import read their complete input, regardless of selection;
 selection limits the machine-code discovery and ABI/value analysis entry sets.
-L1/L2/b4a are not yet an automatic fallback chain. Choose a boundary source first,
-then run ABI analysis. A language **upgrade** updates the database's language model;
+When L2 cannot decode a new input, it can run L1 discovery inside an independently
+bounded instruction image. Without that boundary, select the managed region explicitly.
+Existing L2 generations are preserved on rejection; b4a import and ABI analysis remain explicit.
+A language **upgrade** updates the database's language model;
 it does not rerun analysis or change saved analyzer options.
 
 Machine-code discovery and ABI analysis are disabled by default to avoid scanning

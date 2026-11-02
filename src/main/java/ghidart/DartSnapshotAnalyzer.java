@@ -7,6 +7,7 @@ import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
 import ghidra.framework.options.Options;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.data.QWordDataType;
 import ghidra.program.model.data.ArrayDataType;
@@ -87,7 +88,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         List<Snapshot> snapshots = DartLoadingUnits.isUnit(program, parentFile)
             ? DartLoadingUnits.read(program, parentFile, monitor) : read(program, monitor);
         if (snapshots.isEmpty()) {
-          output.messages().appendMsg(getName(), "No mapped AOT snapshot symbols; L1 remains available.");
+          recoverL1(program, "UNAVAILABLE", "No mapped AOT snapshot symbols", monitor, output.messages());
           return true;
         }
         // Cluster decoding, reference bounds and image ranges are checked before the
@@ -98,16 +99,75 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
           for (Snapshot snapshot : snapshots) publish(program, snapshot, monitor, output.messages());
           monitor.checkCancelled();
           commit = true;
+          program.getOptions(OWNER).setString("L2.status", "PUBLISHED");
         } finally {
           program.endTransaction(transaction, commit);
         }
         return true;
       } catch (IOException | IllegalArgumentException | MemoryAccessException e) {
         monitor.checkCancelled();
-        output.messages().appendMsg(getName(), "L2 rejected: " + e.getMessage() + "; L1 is unchanged.");
+        recoverL1(program, "REJECTED", "L2 rejected: " + e.getMessage(), monitor, output.messages());
         return false;
       }
     }
+  }
+
+  /** Rejection never edits a published generation. New inputs can use bounded L1.
+   * Own the transaction as well as the publication path: direct scripts and
+   * independent ProgramDB callers need not already have an analysis transaction.
+   */
+  private static void recoverL1(Program program, String status, String reason,
+      TaskMonitor monitor, MessageLog log) throws CancelledException {
+    int transaction = program.startTransaction("Coordinate Dart L1 recovery");
+    boolean commit = false;
+    try {
+      program.getOptions(OWNER).setString("L2.status", status);
+      boolean published = java.util.Arrays.stream(program.getMemory().getBlocks())
+          .anyMatch(block -> block.getName().startsWith("DartObjects_"));
+      var managed = findManagedExecutableRange(program);
+      if (published) {
+        log.appendMsg("Dart AOT Objects", reason
+            + "; existing L2 generation preserved; automatic recovery was not run.");
+      } else if (!managed.isEmpty()) {
+        log.appendMsg("Dart AOT Objects", reason + "; running L1 recovery in bounded instruction image.");
+        DartFunctionAnalyzer.recover(program, new AddressSet(), managed, true, monitor, log);
+      } else {
+        log.appendMsg("Dart AOT Objects", reason + "; select managed code region for L1 recovery.");
+      }
+      monitor.checkCancelled();
+      commit = true;
+    } finally {
+      program.endTransaction(transaction, commit);
+    }
+  }
+
+  /** A symbol locates an image, never the containing native text block.
+   * The image's own bounded envelope is independent of clustered object layouts.
+   * Missing/invalid envelopes leave recovery to an explicit user selection.
+   */
+  private static AddressSet findManagedExecutableRange(Program program) {
+    AddressSet range = new AddressSet();
+    for (String name : List.of(
+        "kDartVmSnapshotInstructions", "kDartIsolateSnapshotInstructions", "kDartSnapshotText",
+        "_kDartVmSnapshotInstructions", "_kDartIsolateSnapshotInstructions", "_kDartSnapshotText")) {
+      for (var symbol : program.getSymbolTable().getGlobalSymbols(name)) {
+        if (symbol.getSource() != SourceType.IMPORTED) continue;
+        Address start = symbol.getAddress();
+        try {
+          long size = new DartStream(bytes(program, start, 32)).readInt64();
+          if (size < 32 || (size & 15) != 0 || size > Integer.MAX_VALUE) continue;
+          Address end = start.addNoWrap(size - 1);
+          if (program.getMemory().getExecuteSet().contains(start, end)) {
+            range.add(start.add(32), end);
+          }
+        } catch (IOException | MemoryAccessException
+            | ghidra.program.model.address.AddressOverflowException e) {
+          // A modified image without an independently bounded envelope is not
+          // permission to scan unrelated native instructions.
+        }
+      }
+    }
+    return range;
   }
 
   static List<Snapshot> read(Program program, TaskMonitor monitor)

@@ -6,7 +6,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.10.0",
       "fieldTables": 0,
-      "basePrefix": "base-2.10.0"
+      "basePrefix": "base-2.10.0",
+      "classIdSha256": "67ca35e9e46b4ff0e3f97b919ea04370d4d1f98cab52704ff0dd8ce3fe0b8a0e",
+      "baseSuffix": "base-tail-2.10.0"
     },
     "2.12.0": {
       "source": "https://github.com/dart-lang/sdk/tree/2.12.0/runtime/vm",
@@ -14,7 +16,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.12.0",
       "fieldTables": 0,
-      "basePrefix": "base-2.12.0"
+      "basePrefix": "base-2.12.0",
+      "classIdSha256": "6a76f91b2bf20da61c3e9ff9bc9f76a029eb684f8cdc6080e253e95bdace8998",
+      "baseSuffix": "base-tail-2.12.0"
     },
     "2.13.0": {
       "source": "https://github.com/dart-lang/sdk/tree/2.13.0/runtime/vm",
@@ -22,7 +26,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.13.0",
       "fieldTables": 0,
-      "basePrefix": "base-2.12.0"
+      "basePrefix": "base-2.12.0",
+      "classIdSha256": "21059d39ef6a538013a1f6258392eb1e0639447dd1e363254d919515d318b741",
+      "baseSuffix": "base-tail-2.13.0"
     },
     "2.14.0": {
       "source": "https://github.com/dart-lang/sdk/tree/2.14.0/runtime/vm",
@@ -30,7 +36,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.14.0",
       "fieldTables": 0,
-      "basePrefix": "base-2.12.0"
+      "basePrefix": "base-2.12.0",
+      "classIdSha256": "19fca67b9b2934a7a35aafb6da9ae4c3c609702e57e382c7519442643d989eac",
+      "baseSuffix": "base-tail-2.14.0"
     },
     "2.15.0": {
       "source": "https://github.com/dart-lang/sdk/tree/2.15.0/runtime/vm",
@@ -38,7 +46,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.15.0",
       "fieldTables": 0,
-      "basePrefix": "base-2.12.0"
+      "basePrefix": "base-2.12.0",
+      "classIdSha256": "12c7332ccbf4080161632d819d5b51cfe8fd830640bc6f3cb984c4070384bac9",
+      "baseSuffix": "base-tail-2.14.0"
     },
     "2.16.0": {
       "source": "https://github.com/dart-lang/sdk/tree/2.16.0/runtime/vm",
@@ -46,7 +56,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.16.0",
       "fieldTables": 0,
-      "basePrefix": "base-2.12.0"
+      "basePrefix": "base-2.12.0",
+      "classIdSha256": "677bbf3d11db8acd9d974f7dc1b9987c456889812a406a2d37c6727bd21a6df0",
+      "baseSuffix": "base-tail-2.14.0"
     },
     "2.17.6": {
       "source": "https://github.com/dart-lang/sdk/tree/2.17.6/runtime/vm",
@@ -54,7 +66,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.17.6",
       "fieldTables": 0,
-      "basePrefix": "base-2.12.0"
+      "basePrefix": "base-2.12.0",
+      "classIdSha256": "7fa142093ab0a1488388b7baefe11945d3a1791cee8915af777a84ff37211495",
+      "baseSuffix": "base-tail-2.14.0"
     },
     "2.18.0": {
       "source": "https://github.com/dart-lang/sdk/tree/2.18.0/runtime/vm",
@@ -62,7 +76,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.18.0",
       "fieldTables": 1,
-      "basePrefix": "base-2.18.0"
+      "basePrefix": "base-2.18.0",
+      "classIdSha256": "8dbc9f8fa078741b403d2c11e4a4306cf6ad81c78dc659b4589e4ed3a689fa6a",
+      "baseSuffix": "base-tail-2.14.0"
     },
     "2.19.0": {
       "source": "https://github.com/dart-lang/sdk/tree/2.19.0/runtime/vm",
@@ -70,7 +86,9 @@
       "vm": "vm-2.10.0",
       "program": "program-2.19.0",
       "fieldTables": 1,
-      "basePrefix": "base-2.19.0"
+      "basePrefix": "base-2.19.0",
+      "classIdSha256": "bb6a0dc5de208c3e79ffcf4705425a3a80eda3720841587cfe002fe7106dfc66",
+      "baseSuffix": "base-tail-2.14.0"
     },
     "3.0.5": {
       "source": "https://github.com/dart-lang/sdk/tree/3.0.5/runtime/vm",
@@ -78,7 +96,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.0.5",
       "fieldTables": 1,
-      "basePrefix": "base-3.0.5"
+      "basePrefix": "base-3.0.5",
+      "classIdSha256": "86a808d3f9de1882775950bccac29af57263b124428dafe5e6bbcffdad31ef93",
+      "baseSuffix": "base-tail-3.0.5"
     },
     "3.1.0": {
       "source": "https://github.com/dart-lang/sdk/tree/3.1.0/runtime/vm",
@@ -86,7 +106,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.1.0",
       "fieldTables": 1,
-      "basePrefix": "base-3.0.5"
+      "basePrefix": "base-3.0.5",
+      "classIdSha256": "86ef2d037088a4b874003f80f73324554d176004cb35381de71e64a96f22b3ac",
+      "baseSuffix": "base-tail-3.0.5"
     },
     "3.2.5": {
       "source": "https://github.com/dart-lang/sdk/tree/3.2.5/runtime/vm",
@@ -94,7 +116,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.2.5",
       "fieldTables": 1,
-      "basePrefix": "base-3.2.5"
+      "basePrefix": "base-3.2.5",
+      "classIdSha256": "86ef2d037088a4b874003f80f73324554d176004cb35381de71e64a96f22b3ac",
+      "baseSuffix": "base-tail-3.0.5"
     },
     "3.3.0": {
       "source": "https://github.com/dart-lang/sdk/tree/3.3.0/runtime/vm",
@@ -102,7 +126,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.3.0",
       "fieldTables": 1,
-      "basePrefix": "base-3.2.5"
+      "basePrefix": "base-3.2.5",
+      "classIdSha256": "86ef2d037088a4b874003f80f73324554d176004cb35381de71e64a96f22b3ac",
+      "baseSuffix": "base-tail-3.0.5"
     },
     "3.4.3": {
       "source": "https://github.com/dart-lang/sdk/tree/3.4.3/runtime/vm",
@@ -110,7 +136,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.4.3",
       "fieldTables": 1,
-      "basePrefix": "base-3.2.5"
+      "basePrefix": "base-3.2.5",
+      "classIdSha256": "7b9d1f8105daba891167fff100da19f987ddc92c1bc8b7c839b4dc97819ad5d8",
+      "baseSuffix": "base-tail-3.0.5"
     },
     "3.5.0": {
       "source": "https://github.com/dart-lang/sdk/tree/3.5.0/runtime/vm",
@@ -118,7 +146,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.5.0",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "7b9d1f8105daba891167fff100da19f987ddc92c1bc8b7c839b4dc97819ad5d8",
+      "baseSuffix": "base-tail-3.0.5"
     },
     "3.6.2": {
       "source": "https://github.com/dart-lang/sdk/tree/3.6.2/runtime/vm",
@@ -126,7 +156,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.6.2",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "3b26f3c8c8a333138a6d997949ed7cacc9b972dd554de9079cf6374747f236c3",
+      "baseSuffix": "base-tail-3.6.2"
     },
     "3.7.0": {
       "source": "https://github.com/dart-lang/sdk/tree/3.7.0/runtime/vm",
@@ -134,7 +166,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.6.2",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "3b26f3c8c8a333138a6d997949ed7cacc9b972dd554de9079cf6374747f236c3",
+      "baseSuffix": "base-tail-3.6.2"
     },
     "3.8.1": {
       "source": "https://github.com/dart-lang/sdk/tree/3.8.1/runtime/vm",
@@ -142,7 +176,9 @@
       "vm": "vm-2.10.0",
       "program": "program-3.6.2",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "3b26f3c8c8a333138a6d997949ed7cacc9b972dd554de9079cf6374747f236c3",
+      "baseSuffix": "base-tail-3.6.2"
     },
     "3.9.2": {
       "source": "https://github.com/dart-lang/sdk/tree/3.9.2/runtime/vm",
@@ -150,7 +186,9 @@
       "vm": "vm-3.9.2",
       "program": "program-3.9.2",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "58412a2666741977404048600eec1111db5abaf851f06be2d28c8b0f6b07fcb6",
+      "baseSuffix": "base-tail-3.9.2"
     },
     "3.10.7": {
       "source": "https://github.com/dart-lang/sdk/tree/3.10.7/runtime/vm",
@@ -158,7 +196,9 @@
       "vm": "vm-3.10.7",
       "program": "program-3.10.7",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "636183f3d39827ea73e4b695c7e673ff5d52c520e4bfe98af898f449ec5e59a9",
+      "baseSuffix": "base-tail-3.9.2"
     },
     "3.11.0": {
       "source": "https://github.com/dart-lang/sdk/tree/3.11.0/runtime/vm",
@@ -166,7 +206,9 @@
       "vm": "vm-3.11.0",
       "program": "program-3.11.0",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "636183f3d39827ea73e4b695c7e673ff5d52c520e4bfe98af898f449ec5e59a9",
+      "baseSuffix": "base-tail-3.9.2"
     },
     "3.11.5": {
       "source": "https://github.com/dart-lang/sdk/tree/3.11.5/runtime/vm",
@@ -174,7 +216,9 @@
       "vm": "vm-3.11.0",
       "program": "program-3.11.0",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "636183f3d39827ea73e4b695c7e673ff5d52c520e4bfe98af898f449ec5e59a9",
+      "baseSuffix": "base-tail-3.9.2"
     },
     "3.12.0": {
       "source": "https://github.com/dart-lang/sdk/tree/3.12.0/runtime/vm",
@@ -182,7 +226,9 @@
       "vm": "vm-3.12.0",
       "program": "program-3.12.0",
       "fieldTables": 2,
-      "basePrefix": "base-3.5.0"
+      "basePrefix": "base-3.5.0",
+      "classIdSha256": "4b4d69a94c533a5f6047790e2e2bf58208ecc3b22b210b155be845254be20d16",
+      "baseSuffix": "base-tail-3.9.2"
     },
     "3.13.3": {
       "source": "https://github.com/dart-lang/sdk/tree/3.13.3/runtime/vm",
@@ -190,7 +236,8 @@
       "vm": "vm-3.13.3",
       "program": "program-3.13.3",
       "fieldTables": 2,
-      "basePrefix": "base-3.13.3"
+      "basePrefix": "base-3.13.3",
+      "baseSuffix": "base-tail-3.13.3"
     }
   },
   "groups": {
@@ -10127,6 +10174,285 @@
       "unknown_constant",
       "non_constant",
       "optimized_out"
-    ]
+    ],
+    "base-tail-2.10.0": [
+      "class_Class",
+      "class_PatchClass",
+      "class_Function",
+      "class_ClosureData",
+      "class_SignatureData",
+      "class_RedirectionData",
+      "class_FfiTrampolineData",
+      "class_Field",
+      "class_Script",
+      "class_Library",
+      "class_Namespace",
+      "class_KernelProgramInfo",
+      "class_Code",
+      "class_Bytecode",
+      "class_Instructions",
+      "class_InstructionsSection",
+      "class_ObjectPool",
+      "class_PcDescriptors",
+      "class_CodeSourceMap",
+      "class_CompressedStackMaps",
+      "class_LocalVarDescriptors",
+      "class_ExceptionHandlers",
+      "class_Context",
+      "class_ContextScope",
+      "class_ParameterTypeCheck",
+      "class_SingleTargetCache",
+      "class_UnlinkedCall",
+      "class_MonomorphicSmiableCall",
+      "class_ICData",
+      "class_MegamorphicCache",
+      "class_SubtypeTestCache",
+      "class_LoadingUnit",
+      "class_ApiError",
+      "class_LanguageError",
+      "class_UnhandledException",
+      "class_UnwindError",
+      "class_dynamic",
+      "class_void"
+    ],
+    "base-tail-2.12.0": [
+      "class_Class",
+      "class_PatchClass",
+      "class_Function",
+      "class_ClosureData",
+      "class_FfiTrampolineData",
+      "class_Field",
+      "class_Script",
+      "class_Library",
+      "class_Namespace",
+      "class_KernelProgramInfo",
+      "class_Code",
+      "class_Instructions",
+      "class_InstructionsSection",
+      "class_ObjectPool",
+      "class_PcDescriptors",
+      "class_CodeSourceMap",
+      "class_CompressedStackMaps",
+      "class_LocalVarDescriptors",
+      "class_ExceptionHandlers",
+      "class_Context",
+      "class_ContextScope",
+      "class_SingleTargetCache",
+      "class_UnlinkedCall",
+      "class_MonomorphicSmiableCall",
+      "class_ICData",
+      "class_MegamorphicCache",
+      "class_SubtypeTestCache",
+      "class_LoadingUnit",
+      "class_ApiError",
+      "class_LanguageError",
+      "class_UnhandledException",
+      "class_UnwindError",
+      "class_dynamic",
+      "class_void"
+    ],
+    "base-tail-2.13.0": [
+      "class_Class",
+      "class_PatchClass",
+      "class_Function",
+      "class_ClosureData",
+      "class_FfiTrampolineData",
+      "class_Field",
+      "class_Script",
+      "class_Library",
+      "class_Namespace",
+      "class_KernelProgramInfo",
+      "class_WeakSerializationReference",
+      "class_Code",
+      "class_Instructions",
+      "class_InstructionsSection",
+      "class_ObjectPool",
+      "class_PcDescriptors",
+      "class_CodeSourceMap",
+      "class_CompressedStackMaps",
+      "class_LocalVarDescriptors",
+      "class_ExceptionHandlers",
+      "class_Context",
+      "class_ContextScope",
+      "class_SingleTargetCache",
+      "class_UnlinkedCall",
+      "class_MonomorphicSmiableCall",
+      "class_ICData",
+      "class_MegamorphicCache",
+      "class_SubtypeTestCache",
+      "class_LoadingUnit",
+      "class_ApiError",
+      "class_LanguageError",
+      "class_UnhandledException",
+      "class_UnwindError",
+      "class_dynamic",
+      "class_void"
+    ],
+    "base-tail-2.14.0": [
+      "class_Class",
+      "class_PatchClass",
+      "class_Function",
+      "class_TypeParameters",
+      "class_ClosureData",
+      "class_FfiTrampolineData",
+      "class_Field",
+      "class_Script",
+      "class_Library",
+      "class_Namespace",
+      "class_KernelProgramInfo",
+      "class_WeakSerializationReference",
+      "class_Code",
+      "class_Instructions",
+      "class_InstructionsSection",
+      "class_InstructionsTable",
+      "class_ObjectPool",
+      "class_PcDescriptors",
+      "class_CodeSourceMap",
+      "class_CompressedStackMaps",
+      "class_LocalVarDescriptors",
+      "class_ExceptionHandlers",
+      "class_Context",
+      "class_ContextScope",
+      "class_Sentinel",
+      "class_SingleTargetCache",
+      "class_UnlinkedCall",
+      "class_MonomorphicSmiableCall",
+      "class_ICData",
+      "class_MegamorphicCache",
+      "class_SubtypeTestCache",
+      "class_LoadingUnit",
+      "class_ApiError",
+      "class_LanguageError",
+      "class_UnhandledException",
+      "class_UnwindError",
+      "class_dynamic",
+      "class_void"
+    ],
+    "base-tail-3.0.5": [
+      "class_Class",
+      "class_PatchClass",
+      "class_Function",
+      "class_TypeParameters",
+      "class_ClosureData",
+      "class_FfiTrampolineData",
+      "class_Field",
+      "class_Script",
+      "class_Library",
+      "class_Namespace",
+      "class_KernelProgramInfo",
+      "class_WeakSerializationReference",
+      "class_WeakArray",
+      "class_Code",
+      "class_Instructions",
+      "class_InstructionsSection",
+      "class_InstructionsTable",
+      "class_ObjectPool",
+      "class_PcDescriptors",
+      "class_CodeSourceMap",
+      "class_CompressedStackMaps",
+      "class_LocalVarDescriptors",
+      "class_ExceptionHandlers",
+      "class_Context",
+      "class_ContextScope",
+      "class_Sentinel",
+      "class_SingleTargetCache",
+      "class_UnlinkedCall",
+      "class_MonomorphicSmiableCall",
+      "class_ICData",
+      "class_MegamorphicCache",
+      "class_SubtypeTestCache",
+      "class_LoadingUnit",
+      "class_ApiError",
+      "class_LanguageError",
+      "class_UnhandledException",
+      "class_UnwindError",
+      "class_dynamic",
+      "class_void"
+    ],
+    "base-tail-3.6.2": [
+      "class_Class",
+      "class_PatchClass",
+      "class_Function",
+      "class_TypeParameters",
+      "class_ClosureData",
+      "class_FfiTrampolineData",
+      "class_Field",
+      "class_Script",
+      "class_Library",
+      "class_Namespace",
+      "class_KernelProgramInfo",
+      "class_WeakSerializationReference",
+      "class_WeakArray",
+      "class_Code",
+      "class_Bytecode",
+      "class_Instructions",
+      "class_InstructionsSection",
+      "class_InstructionsTable",
+      "class_ObjectPool",
+      "class_PcDescriptors",
+      "class_CodeSourceMap",
+      "class_CompressedStackMaps",
+      "class_LocalVarDescriptors",
+      "class_ExceptionHandlers",
+      "class_Context",
+      "class_ContextScope",
+      "class_Sentinel",
+      "class_SingleTargetCache",
+      "class_UnlinkedCall",
+      "class_MonomorphicSmiableCall",
+      "class_ICData",
+      "class_MegamorphicCache",
+      "class_SubtypeTestCache",
+      "class_LoadingUnit",
+      "class_ApiError",
+      "class_LanguageError",
+      "class_UnhandledException",
+      "class_UnwindError",
+      "class_dynamic",
+      "class_void"
+    ],
+    "base-tail-3.9.2": [
+      "class_Class",
+      "class_PatchClass",
+      "class_Function",
+      "class_TypeParameters",
+      "class_ClosureData",
+      "class_FfiTrampolineData",
+      "class_Field",
+      "class_Script",
+      "class_Library",
+      "class_Namespace",
+      "class_KernelProgramInfo",
+      "class_WeakSerializationReference",
+      "class_WeakArray",
+      "class_Code",
+      "class_Bytecode",
+      "class_Instructions",
+      "class_InstructionsSection",
+      "class_InstructionsTable",
+      "class_ObjectPool",
+      "class_PcDescriptors",
+      "class_CodeSourceMap",
+      "class_CompressedStackMaps",
+      "class_LocalVarDescriptors",
+      "class_ExceptionHandlers",
+      "class_Context",
+      "class_ContextScope",
+      "class_Sentinel",
+      "class_SingleTargetCache",
+      "class_MonomorphicSmiableCall",
+      "class_UnlinkedCall",
+      "class_ICData",
+      "class_MegamorphicCache",
+      "class_SubtypeTestCache",
+      "class_LoadingUnit",
+      "class_ApiError",
+      "class_LanguageError",
+      "class_UnhandledException",
+      "class_UnwindError",
+      "class_dynamic",
+      "class_void"
+    ],
+    "base-tail-3.13.3": []
   }
 }

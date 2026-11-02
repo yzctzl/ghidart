@@ -73,7 +73,7 @@ final class DartSnapshotSymbols {
     while (baseScope.vm != null) baseScope = baseScope.vm;
     if (baseScope.roots != null) {
       var baseOwner = namespace(namespace(root, "VM", false), "BaseObjects", false);
-      for (var role : baseScope.roots.references().entrySet()) {
+      for (var role : baseScope.roots.baseIdentities().entrySet()) {
         monitor.checkCancelled();
         if (role.getKey().startsWith("base.")) {
           label(identity(role.getValue()), role.getKey().substring(5), baseOwner);

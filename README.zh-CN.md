@@ -111,7 +111,8 @@ Double 同时保留精确位模式。
 固定大小的用户类布局位于 **Data Type Manager → Dart → L2**。字段位置从目标字单位
 转换成字节偏移；tagged 槽位不冒充 native 指针，未知的 unboxed 数字类型保留为原始存储。
 继承字段沿已保留的父类关系命名。SDK 定义的 null、布尔值和 sentinel 等基础对象
-位于 **Dart → VM → BaseObjects**。
+及内部 Class 对象位于 **Dart → VM → BaseObjects**。
+VM 缓存对象保留独立编号标签，不猜测文件中没有的运行时内容。
 
 打开延迟单元 `*-<id>.part.so`／`.dylib` 时，将根文件及祖先单元放在旁边。
 L2 临时读取父引用表，验证程序身份后应用该单元的 Code／池补丁；其他文件名可通过

@@ -32,12 +32,19 @@ public final class DartClusterParser {
   /** Root references are scoped snapshot IDs; dispatch entries remain Code indices. */
   public record RootData(Map<String, Integer> references, int[] staticFields,
       int[] sharedStaticFields, int firstCodeRef, long[] dispatchCodeIndices,
-      int endOffset, UnitData unit) {
+      int endOffset, UnitData unit, Map<String, Integer> baseIdentities) {
     public RootData(Map<String, Integer> references, int[] staticFields,
         int[] sharedStaticFields, int firstCodeRef, long[] dispatchCodeIndices, int endOffset) {
       this(references, staticFields, sharedStaticFields, firstCodeRef, dispatchCodeIndices, endOffset, null);
     }
+    public RootData(Map<String, Integer> references, int[] staticFields,
+        int[] sharedStaticFields, int firstCodeRef, long[] dispatchCodeIndices,
+        int endOffset, UnitData unit) {
+      this(references, staticFields, sharedStaticFields, firstCodeRef, dispatchCodeIndices,
+          endOffset, unit, Map.of());
+    }
     public RootData {
+      baseIdentities = Map.copyOf(baseIdentities);
       references = Collections.unmodifiableMap(new java.util.LinkedHashMap<>(references));
       staticFields = staticFields.clone();
       sharedStaticFields = sharedStaticFields.clone();
@@ -1260,6 +1267,7 @@ public final class DartClusterParser {
     com.google.gson.JsonObject layout;
     com.google.gson.JsonArray names;
     com.google.gson.JsonArray basePrefix;
+    com.google.gson.JsonArray baseSuffix;
     try (var input = DartClusterParser.class.getResourceAsStream("/ghidart/snapshot-roots.json")) {
       if (input == null) throw new IOException("missing SDK root descriptors");
       var layouts = com.google.gson.JsonParser.parseReader(
@@ -1270,8 +1278,11 @@ public final class DartClusterParser {
       names = layouts.getAsJsonObject("groups").getAsJsonArray(group);
       basePrefix = layouts.getAsJsonObject("groups").getAsJsonArray(
           layout.get("basePrefix").getAsString());
+      baseSuffix = layouts.getAsJsonObject("groups").getAsJsonArray(
+          layout.get("baseSuffix").getAsString());
     }
     var refs = new java.util.LinkedHashMap<String, Integer>();
+    var baseIdentities = new java.util.LinkedHashMap<String, Integer>();
     for (var name : names) {
       int ref = (int) s.readRef(profile.fillRefUnsigned);
       if (ref == 0) throw new IOException("root references illegal snapshot identity 0");
@@ -1304,7 +1315,25 @@ public final class DartClusterParser {
         throw new IOException("VM base object prefix exceeds reference table");
       }
       int ref = 1;
-      for (var role : basePrefix) refs.put("base." + role.getAsString(), ref++);
+      for (var role : basePrefix) {
+        refs.put("base." + role.getAsString(), ref);
+        baseIdentities.put("base." + role.getAsString(), ref++);
+      }
+      // FullAOT split snapshots end their base table with internal Class
+      // objects, then dynamic/void. SDK-generated names are anchored at the
+      // end: variable cached-argument/ICData arrays do not shift this suffix.
+      // These are identities only; their absent runtime fields are not invented.
+      if (!baseSuffix.isEmpty()) {
+        if (baseSuffix.size() != profile.cids.instance - profile.cids.clazz
+            || basePrefix.size() + baseSuffix.size() > header.numBaseObjects) {
+          throw new IOException("VM base Class suffix disagrees with CID table or extent");
+        }
+        int first = Math.toIntExact(header.numBaseObjects - baseSuffix.size() + 1);
+        for (int cached = 0; ref < first; ref++, cached++) {
+          baseIdentities.put("base.cached_vm_object[" + cached + "]", ref);
+        }
+        for (var role : baseSuffix) baseIdentities.put("base." + role.getAsString(), ref++);
+      }
     }
     for (var root : refs.entrySet()) {
       if (!root.getKey().equals("object_store.global_object_pool")) continue;
@@ -1382,7 +1411,7 @@ public final class DartClusterParser {
     // the separate aligned data image. No unread root bytes may be accepted.
     if (s.remaining() != 0) throw new IOException("unconsumed root data: " + s.remaining()
         + " bytes after " + profile.dartVersion + (header.isVm ? " VM" : " program"));
-    return new RootData(refs, fields, shared, firstCode, dispatch, end);
+    return new RootData(refs, fields, shared, firstCode, dispatch, end, null, baseIdentities);
   }
 
   /** SDK UnitDeserializationRoots: patch parent Code entries and global pool slots. */
@@ -1442,7 +1471,7 @@ public final class DartClusterParser {
     if (position != pool.size() || s.remaining() != 0) throw new IOException("incomplete loading-unit roots");
     return new RootData(parent.roots.references(), parent.roots.staticFields(),
         parent.roots.sharedStaticFields(), parent.roots.firstCodeRef(), new long[0], s.position(),
-        new UnitData((int) first, (int) count, updates, sourceMaps, stackMaps));
+        new UnitData((int) first, (int) count, updates, sourceMaps, stackMaps), parent.roots.baseIdentities());
   }
 
   public static AllocKind classifyAlloc(int cid, DartClassId.Table ct) {

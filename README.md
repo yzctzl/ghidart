@@ -134,7 +134,8 @@ Fixed user-class layouts appear under **Data Type Manager → Dart → L2**. Fie
 positions are converted from target words to bytes; tagged slots are not treated as
 native pointers, and unknown unboxed numeric types remain raw storage. Inherited fields
 use the retained superclass relationship. SDK-defined base identities such as null,
-bools and sentinels appear under **Dart → VM → BaseObjects**.
+bools, sentinels and internal Class objects appear under **Dart → VM → BaseObjects**.
+Cached VM identities retain separate numbered labels; unavailable runtime contents are not inferred.
 
 Open a deferred `*-<id>.part.so`/`.dylib` with its root and ancestor units beside it.
 L2 reads parent reference tables temporarily, validates program identity and applies

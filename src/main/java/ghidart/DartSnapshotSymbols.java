@@ -37,7 +37,6 @@ final class DartSnapshotSymbols {
   private final DartClusterParser.Result objects;
   private final Address anchor;
   private final Map<Integer, Namespace> owners = new HashMap<>();
-  private final Map<Integer, Address> strings = new HashMap<>();
   private final Map<Integer, DartClusterParser.ClassInfo> classes = new HashMap<>();
   private final TaskMonitor monitor;
   private Namespace root;
@@ -49,7 +48,9 @@ final class DartSnapshotSymbols {
     this.objects = snapshot.objects();
     this.anchor = anchor;
     this.monitor = monitor;
-    for (var cls : objects.classes) classes.put(cls.refId, cls);
+    for (var scope = objects; scope != null; scope = scope.vm) {
+      for (var cls : scope.classes) classes.putIfAbsent(cls.refId, cls);
+    }
   }
 
   static void publish(Program program, DartSnapshotAnalyzer.Snapshot snapshot,
@@ -66,6 +67,19 @@ final class DartSnapshotSymbols {
       CircularDependencyException, IOException, CancelledException {
     monitor.setMessage("Organizing Dart library and class scopes");
     root = namespace(program.getGlobalNamespace(), "Dart", false);
+    // Base identities keep the same indices through VM, program and loading-unit
+    // reference tables. Give them names without assigning a runtime heap address.
+    var baseScope = objects;
+    while (baseScope.vm != null) baseScope = baseScope.vm;
+    if (baseScope.roots != null) {
+      var baseOwner = namespace(namespace(root, "VM", false), "BaseObjects", false);
+      for (var role : baseScope.roots.references().entrySet()) {
+        monitor.checkCancelled();
+        if (role.getKey().startsWith("base.")) {
+          label(identity(role.getValue()), role.getKey().substring(5), baseOwner);
+        }
+      }
+    }
     int classes = 0;
     for (var cls : objects.classes) {
       monitor.checkCancelled();
@@ -87,7 +101,7 @@ final class DartSnapshotSymbols {
     for (var code : objects.codes) {
       monitor.checkCancelled();
       if (code.clusterIndex < 0) continue;
-      var declaration = objects.namedByRef.get(code.ownerRef);
+      var declaration = objects.named(code.ownerRef);
       int slot = code.clusterIndex + snapshot.table().firstEntryWithCode;
       long pc = snapshot.table().entries.get(slot).pcOffset();
       long normal = pc + ((code.payloadInfo & 1) != 0 ? 24 : 0);
@@ -135,7 +149,7 @@ final class DartSnapshotSymbols {
       for (var declaration : objects.namedObjects) {
         monitor.checkCancelled();
         if (declaration.cid != objects.profile.cids.function) continue;
-        var serialized = objects.objects.get(declaration.refId);
+        var serialized = objects.object(declaration.refId);
         if (serialized == null || serialized.scalars().length == 0) continue;
         long codeIndex = serialized.scalars()[0];
         if (codeIndex <= 0 || codeIndex > snapshot.table().length) continue; // Lazy/deferred.
@@ -170,17 +184,82 @@ final class DartSnapshotSymbols {
         function.setParentNamespace(namespace(namespace(root, "Unresolved", false), snapshot.scope(), false));
       }
     }
-    collectStrings(objects, snapshot.data());
-    if (objects.vm != null) {
-      Address vmData = DartSnapshotAnalyzer.symbol(program, "kDartVmSnapshotData");
-      if (vmData != null) collectStrings(objects.vm, vmData);
+    var destinations = DartSnapshotAnalyzer.fileTargets(program, snapshot);
+    // ObjectStore roots identify shared stubs even when their Code has no named
+    // Function owner. Use the decoded role, never an instruction hash or address.
+    for (var role : objects.roots.references().entrySet()) {
+      monitor.checkCancelled();
+      var record = objects.objects.get(role.getValue());
+      if (record == null || record.cid() != objects.profile.cids.code) continue;
+      Address target = destinations.get(role.getValue());
+      if (target == null) continue;
+      var function = program.getFunctionManager().getFunctionAt(target);
+      if (function == null || function.getSymbol().getSource() != SourceType.ANALYSIS) continue;
+      String name = clean(role.getKey().replaceFirst("^object_store\\.", ""));
+      Namespace parent = namespace(namespace(root, "VM", false), snapshot.scope(), false);
+      if (function.getName().equals("dart_" + Long.toUnsignedString(target.subtract(program.getImageBase()), 16))) {
+        function.setParentNamespace(parent);
+        function.setName(name, SourceType.ANALYSIS);
+      } else {
+        label(target, name, parent);
+      }
     }
+    // Merged Code clusters serialize these helper identities explicitly. The
+    // older VM root tail does not, so no cross-version stub ordinal is guessed.
+    for (var cluster : objects.clusters) {
+      if (cluster.cid != objects.profile.cids.code) continue;
+      for (var helper : Map.of("LazyCompile", cluster.lazyCompileRef,
+          "UnknownDartCode", cluster.unknownDartCodeRef).entrySet()) {
+        if (helper.getValue() <= 0) continue;
+        Address target = destinations.get(helper.getValue());
+        if (target != null) label(target, helper.getKey(),
+            namespace(namespace(root, "VM", false), snapshot.scope(), false));
+      }
+    }
+    // Give serialized graph nodes useful names while keeping their identity separate
+    // from executable entries. Clicking an identity still exposes its retained fields.
+    for (var code : objects.codes) {
+      monitor.checkCancelled();
+      if (code.clusterIndex < 0) continue;
+      int slot = code.clusterIndex + snapshot.table().firstEntryWithCode;
+      long pc = snapshot.table().entries.get(slot).pcOffset() + ((code.payloadInfo & 1) != 0 ? 24 : 0);
+      var function = program.getFunctionManager().getFunctionAt(snapshot.instructions().add(pc));
+      if (function == null) continue;
+      label(identity(code.refId), "code_info_" + function.getName(), function.getParentNamespace());
+      var declaration = objects.named(code.ownerRef);
+      if (declaration != null && declaration.cid == objects.profile.cids.clazz) {
+        comment(function.getEntryPoint(), "Dart class allocation stub; this is not a class method. "
+            + "The payload may tail-call a shared allocator. Class metadata: " + identity(declaration.refId));
+      }
+    }
+    for (var named : objects.namedObjects) {
+      monitor.checkCancelled();
+      if (named.cid == objects.profile.cids.function) {
+        label(identity(named.refId), "function_info_" + string(named.nameRefId, "ref_" + named.refId),
+            owner(named.ownerRefId, new HashSet<>()));
+        var serialized = objects.object(named.refId);
+        if (!objects.profile.codeTextOffsetDelta && serialized != null
+            && serialized.scalars().length > 0 && serialized.scalars()[0] == 0) {
+          comment(identity(named.refId), "Dart Function declaration has no compiled AOT body: "
+              + "code_index 0 selects SDK LazyCompile, not the first instruction payload.");
+        }
+      }
+    }
+    // Serialized numeric values are useful at their logical identities too.
+    // Preserve exact Double bits (including signed zero and NaN payloads), and
+    // never define these artificial identity bytes as runtime numeric objects.
+    for (var object : objects.objects.values()) {
+      monitor.checkCancelled();
+      String numeric = objects.numericValue(object.refId());
+      if (numeric != null) comment(identity(object.refId()), "Dart serialized " + numeric);
+    }
+    collectStrings(objects, snapshot.data());
     Namespace pools = namespace(namespace(root, "ObjectPools", false), snapshot.scope(), false);
     long references = objects.header.numObjects + 1;
     var poolNamespaces = new HashMap<Integer, Namespace>();
     int position = 0;
-    monitor.initialize(objects.poolEntries.size(), "Describing Dart pool slots");
-    for (var entry : objects.poolEntries) {
+    monitor.initialize(objects.imagePoolEntries().size(), "Describing Dart pool slots");
+    for (var entry : objects.imagePoolEntries()) {
       monitor.increment();
       monitor.checkCancelled();
       Address address = anchor.add((references + position++) * 8);
@@ -190,13 +269,16 @@ final class DartSnapshotSymbols {
         poolNamespaces.put(entry.poolRef, pool);
         label(address, "slots", pool);
       }
+      label(address, "slot_" + entry.index + "_pp_" + Long.toHexString(entry.byteOffsetFromUntaggedPool()), pool);
       String text = "PP+0x" + Long.toHexString(entry.byteOffsetFromUntaggedPool())
           + " [" + entry.index + "] " + entry.kind + " bits=0x" + Integer.toHexString(entry.bits);
       if (entry.kind == DartClusterParser.PoolEntryKind.TAGGED) {
         text += " ref #" + entry.refId;
         String value = string(entry.refId, null);
         if (value != null) text += " String " + preview(value);
-        Address target = strings.get(entry.refId);
+        String numeric = objects.numericValue(entry.refId);
+        if (numeric != null) text += " " + numeric;
+        Address target = destinations.get(entry.refId);
         if (target != null) reference(address, target, RefType.DATA);
       } else if (entry.kind == DartClusterParser.PoolEntryKind.IMMEDIATE) {
         text += " = 0x" + Long.toHexString(entry.imm);
@@ -215,7 +297,6 @@ final class DartSnapshotSymbols {
     for (var string : result.strings) {
       monitor.increment();
       monitor.checkCancelled();
-      if (!string.value.isEmpty()) strings.putIfAbsent(string.refId, data.add(string.dataOffset));
       if (result != objects || string.headerOffset < 0) continue;
       Address header = data.add(string.headerOffset);
       if (program.getListing().getDefinedDataContaining(header) == null) {
@@ -244,9 +325,9 @@ final class DartSnapshotSymbols {
       throws InvalidInputException, DuplicateNameException {
     if (owners.containsKey(ref)) return owners.get(ref);
     if (ref <= 0 || active.size() >= 32 || !active.add(ref)) return namespace(root, "Unresolved", false);
-    var named = objects.namedByRef.get(ref);
+    var named = objects.named(ref);
     if (named == null) {
-      var object = objects.objects.get(ref);
+      var object = objects.object(ref);
       if (object != null && object.cid() == objects.profile.cids.patchClass) {
         int[] refs = object.references();
         if (refs.length > 0) return owner(refs[0], active);
@@ -255,7 +336,7 @@ final class DartSnapshotSymbols {
     }
     Namespace parent;
     if (named.cid == objects.profile.cids.library) {
-      var object = objects.objects.get(ref);
+      var object = objects.object(ref);
       int[] refs = object == null ? new int[0] : object.references();
       String url = refs.length > 1 ? string(refs[1], null) : null;
       parent = root;
@@ -293,8 +374,7 @@ final class DartSnapshotSymbols {
   private Address identity(int ref) { return anchor.add((long) ref * 8); }
 
   private String string(int ref, String fallback) {
-    String value = objects.stringByRef.get(ref);
-    if (value == null && objects.vm != null) value = objects.vm.stringByRef.get(ref);
+    String value = objects.string(ref);
     return value == null ? fallback : value;
   }
 

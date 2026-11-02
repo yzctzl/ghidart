@@ -165,6 +165,9 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
         }
       }
     }
+    // L2 may independently prove a Class-owned allocation stub's x0 result.
+    // This supplies no argument count and is absent in the L1-only path.
+    DartObjectUses.allocationReturns(program, bottomUp, monitor);
     var nativeRecovery = new DecompilerParameterIdCmd(
         getName(), safeEntries, SourceType.DEFAULT, true, false, 20);
     if (!nativeRecovery.applyTo(program, monitor)) {
@@ -194,6 +197,10 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
           log.appendMsg(getName(), "Return contract rejected at " + entry + ": " + e.getMessage());
         }
       }
+    }
+    int allocations = DartObjectUses.allocationReturns(program, bottomUp, monitor);
+    if (allocations != 0) {
+      log.appendMsg(getName(), allocations + " L2-proved allocation returns restored to x0.");
     }
     if (inferMemoryShapes) {
       int shapes = DartMemoryShapes.recover(program, bottomUp, monitor, log);

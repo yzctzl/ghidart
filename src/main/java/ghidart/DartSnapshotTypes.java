@@ -26,6 +26,7 @@ import java.util.Map;
  */
 final class DartSnapshotTypes {
   private static final CategoryPath ROOT = new CategoryPath("/Dart/L2");
+  private static final com.google.gson.Gson JSON = new com.google.gson.Gson();
 
   static void publish(Program program, DartSnapshotAnalyzer.Snapshot snapshot,
       TaskMonitor monitor, MessageLog log) throws CancelledException {
@@ -50,6 +51,16 @@ final class DartSnapshotTypes {
       var storage = objects.fieldStorage(field);
       if (storage.isStatic() || storage.offsetOrId() == null
           || storage.offsetOrId() > Integer.MAX_VALUE) continue;
+      var block = program.getMemory().getBlock("DartObjects_" + snapshot.scope());
+      var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
+      var identity = block.getStart().add(field.refId * 8L);
+      String stored = facts.getString(identity);
+      var json = stored == null ? new com.google.gson.JsonObject()
+          : com.google.gson.JsonParser.parseString(stored).getAsJsonObject();
+      json.addProperty("kind", "Field");
+      json.add("object", JSON.toJsonTree(field));
+      json.add("storage", JSON.toJsonTree(storage));
+      facts.add(identity, json.toString());
       fields.computeIfAbsent(field.ownerRefId, ignored -> new HashMap<>())
           .putIfAbsent(storage.offsetOrId().intValue(), field);
     }
@@ -70,10 +81,27 @@ final class DartSnapshotTypes {
         skipped++;
         continue;
       }
+      var block = program.getMemory().getBlock("DartObjects_" + snapshot.scope());
+      var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
+      var identity = block.getStart().add(cls.refId * 8L);
+      String stored = facts.getString(identity);
+      // Inherited declarations in loading units may only have a raw record.
+      // Publish the same typed facts locally, without borrowing parent addresses.
+      var json = stored == null ? new com.google.gson.JsonObject()
+          : com.google.gson.JsonParser.parseString(stored).getAsJsonObject();
+      json.addProperty("kind", "Class");
+      json.add("object", JSON.toJsonTree(cls));
+      var retainedSuper = types.get(cls.superTypeRefId);
+      Integer retainedSuperCid = retainedSuper == null ? null : objects.typeClassId(retainedSuper);
+      var parentClass = retainedSuperCid == null ? null : classesByCid.get(retainedSuperCid);
       String name = objects.classNameByCid.getOrDefault(cls.classId, "anonymous");
       name = SymbolUtilities.replaceInvalidChars(name, true);
       if (name.length() > 120) name = name.substring(0, 120);
       name = "CID_" + cls.classId + "_" + name;
+      json.add("layout", JSON.toJsonTree(Map.of(
+          "word", word, "size", size, "parentRef", parentClass == null ? -1 : parentClass.refId,
+          "typePath", path.getPath() + "/" + name)));
+      facts.add(identity, json.toString());
       var type = new StructureDataType(path, name, (int) size);
       type.setDescription("Dart L2 " + snapshot.scope() + " Class ref #" + cls.refId
           + "; untagged target layout, word=" + word

@@ -144,6 +144,14 @@ immediate parent binary. Missing/wrong parents reject L2 without inventing addre
 **Dart Value Uses** can name unambiguous pool-load locals after ABI recovery; it
 preserves their inferred types and user edits. Names include available initial string/base-object
 hints, without folding mutable snapshot values.
+It also tracks known class-allocation results and non-patchable pool instances
+through SSA copies and unambiguous merges. Exact field accesses link to retained
+Field declarations, including inherited fields; generated locals carry class/field
+names. Whole SSA locals proved to hold one full-width tagged Class use Ghidra's
+native shifted-pointer type (`ADJ(obj)->field`); compressed values remain integers.
+`ShowDartValueUses.java` reports object, argument and return provenance.
+Unknown calls, ambiguous values and missing declarations stop this propagation;
+logical signatures are not substituted for the physical ABI.
 Hashes only suggest a reader: failed hints fall back to complete structural decoding,
 and conflicting interpretations are rejected. Full version coverage remains under
 development. Pool offsets alone do not identify an object or string at a code use site.

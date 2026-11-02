@@ -1,5 +1,5 @@
 /**
- * Retain machine-value uses from Ghidra's SSA without interpreting Dart objects.
+ * Retain machine-value uses from Ghidra's SSA, with optional validated L2 provenance.
  *
  * PP origins are scoped to one SSA input or definition, not a global pool ID.
  * Constant-only merges retain at most eight alternatives; relative-address
@@ -48,7 +48,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Optional SSA use index and concrete indirect-call references. */
+/** Selected-function SSA uses, concrete references and validated L2 declaration uses. */
 public final class DartValueAnalyzer extends AbstractAnalyzer {
   private static final String PROPERTY = "ghidart.machineValueUses.v1";
   private static final Gson JSON = new Gson();
@@ -67,6 +67,19 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
    */
   public record Use(String site, int sequence, String kind, int input, int width,
       String origin, long value) {}
+
+  /** Exact receiver provenance and declaration uses; declarations are logical
+   * database addresses, not runtime pointers. Value records the physical call
+   * input index when kind is call-argument, not a Dart logical parameter index.
+   */
+  public record ObjectUse(String site, String kind, String declaration, String value) {}
+  private static final String OBJECT_USES = "ghidart.L2.valueSemantics.v1";
+
+  public static List<ObjectUse> objectUses(Program program, Function function) {
+    var property = program.getUsrPropertyManager().getStringPropertyMap(OBJECT_USES);
+    String json = property == null ? null : property.getString(function.getEntryPoint());
+    return json == null ? List.of() : List.of(JSON.fromJson(json, ObjectUse[].class));
+  }
 
   private record Link(String from, String to, String kind) {}
   private record Named(long symbol, String name, long type, long hash, int firstUse) {}
@@ -128,10 +141,12 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
 
   private boolean analyze(Program program, AddressSetView entries, TaskMonitor monitor,
       MessageLog log) throws CancelledException {
+    var objects = DartObjectUses.read(program, monitor);
     var decompiler = new DecompInterface();
     int functions = 0;
     int uses = 0;
     int links = 0;
+    int objectUses = 0;
     int skipped = 0;
     int failed = 0;
     int timedOut = 0;
@@ -192,7 +207,22 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
           monitor.setMessage(current + ": collecting SSA uses");
           var facts = collect(program, function, result.getHighFunction(), monitor);
           monitor.setMessage(current + ": saving references and names");
-          links += save(program, function, facts);
+          var semantics = objects.collect(function, result.getHighFunction(), monitor);
+          var semanticLinks = new ArrayList<>(facts.links());
+          for (var use : semantics.uses()) {
+            semanticLinks.add(new Link(use.site(), use.declaration(), "declaration"));
+          }
+          links += save(program, function, new Facts(facts.uses(), semanticLinks));
+          var property = program.getUsrPropertyManager().getStringPropertyMap(OBJECT_USES);
+          if (property == null) {
+            try { property = program.getUsrPropertyManager().createStringPropertyMap(OBJECT_USES); }
+            catch (DuplicateNameException e) { throw new IllegalStateException(e); }
+          }
+          property.add(function.getEntryPoint(), JSON.toJson(semantics.uses()));
+          for (var name : semantics.names().entrySet()) {
+            nameExpression(program, function, result.getHighFunction(), name.getKey(), name.getValue(), semantics.types().get(name.getKey()));
+          }
+          objectUses += semantics.uses().size();
           if (nameHeapBases) nameHeapBases(program, function, result.getHighFunction(), monitor);
           if (namePoolValues) DartPoolReferences.nameValues(program, function, result.getHighFunction(), monitor);
           functions++;
@@ -209,7 +239,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     }
     long seconds = (System.nanoTime() - started) / 1_000_000_000;
     String summary = functions + " functions, " + uses + " machine-value uses, "
-        + links + " native references; " + skipped + " skipped, " + failed
+        + links + " native references, " + objectUses + " L2 object uses; " + skipped + " skipped, " + failed
         + " failed (" + timedOut + " timed out), " + seconds + " s.";
     monitor.setMessage(getName() + ": " + summary);
     log.appendMsg(getName(), summary + " PP offsets are not pool entries.");
@@ -306,7 +336,13 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   /** An owned native display name; neither a value substitution nor a type claim. */
   static boolean nameExpression(Program program, Function function, HighFunction high,
       Varnode value, String preferred) {
-    if (value == null || value.isInput() || value.getSize() != 8
+    return nameExpression(program, function, high, value, preferred, null);
+  }
+
+  /** An optional proved type is applied only when creating a new owned local. */
+  private static boolean nameExpression(Program program, Function function, HighFunction high,
+      Varnode value, String preferred, ghidra.program.model.data.DataType provedType) {
+    if (value == null || value.isInput() || (value.getSize() != 4 && value.getSize() != 8)
         || value.getHigh() instanceof ghidra.program.model.pcode.HighParam
         || value.getHigh() instanceof ghidra.program.model.pcode.HighGlobal) return false;
     var facts = read(program, function);
@@ -314,7 +350,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     var dynamic = new DynamicHash(value, high);
     if (dynamic.getHash() == 0 || dynamic.getAddress() == null) return false;
     try {
-      var storage = new VariableStorage(program, AddressSpace.HASH_SPACE.getAddress(dynamic.getHash()), 8);
+      var storage = new VariableStorage(program, AddressSpace.HASH_SPACE.getAddress(dynamic.getHash()), value.getSize());
       for (var local : function.getLocalVariables()) {
         if (local.getVariableStorage().equals(storage)) return false;
       }
@@ -322,9 +358,10 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
       for (int suffix = 1; program.getSymbolTable().getVariableSymbol(name, function) != null;
           suffix++) name = preferred + "_" + suffix;
       int firstUse = (int) dynamic.getAddress().subtract(function.getEntryPoint());
-      var type = value.getHigh() == null ? null : value.getHigh().getDataType();
+      var type = provedType != null ? provedType
+          : value.getHigh() == null ? null : value.getHigh().getDataType();
       if (type == null || type.getLength() != value.getSize()) {
-        type = ghidra.program.model.data.Undefined8DataType.dataType;
+        type = ghidra.program.model.data.Undefined.getUndefinedDataType(value.getSize());
       }
       var local = function.addLocalVariable(new LocalVariableImpl(name, firstUse,
           type, storage, program), SourceType.ANALYSIS);
@@ -450,6 +487,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
       case "call" -> RefType.COMPUTED_CALL;
       case "read" -> RefType.READ;
       case "write" -> RefType.WRITE;
+      case "declaration" -> RefType.DATA;
       default -> throw new IllegalStateException("Invalid machine-value reference kind");
     };
   }
@@ -477,6 +515,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   }
 
   private static void clear(Program program, Function function) {
+    var semantics = program.getUsrPropertyManager().getStringPropertyMap(OBJECT_USES);
+    if (semantics != null) semantics.remove(function.getEntryPoint());
     var facts = read(program, function);
     if (facts == null) return;
     for (var owned : facts.names()) {

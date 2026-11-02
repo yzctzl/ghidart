@@ -168,6 +168,32 @@ final class DartThreadCalls {
     return recovered;
   }
 
+  /** Recognized guards, barriers and Mint helpers can relocate an object during
+   * GC, but do not replace the caller's spilled object with another class.
+   * This is a type-preservation fact, not a claim that its pointer bits or heap
+   * fields stay unchanged. Only our unchanged, machine-proved call contracts
+   * qualify; arbitrary calls and user-edited overrides do not.
+   */
+  static boolean preservesSpilledObjectType(Program program, Function caller, Address site) {
+    var owned = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L1.helperCalls");
+    String saved = owned == null ? null : owned.getString(site);
+    if (saved == null) return false;
+    var space = ghidra.program.model.pcode.HighFunction.findOverrideSpace(caller);
+    int overrides = 0;
+    for (var symbol : program.getSymbolTable().getSymbols(site)) {
+      if (space != null && symbol.getParentNamespace().equals(space)
+          && ghidra.program.model.pcode.HighFunctionDBUtil.readOverride(symbol) != null) overrides++;
+    }
+    if (overrides != 1) return false;
+    var signature = DartRuntimeCalls.callSignature(program, caller, site);
+    if (signature == null || !saved.equals(signature.getPrototypeString(true))) return false;
+    String name = signature.getCallingConventionName();
+    return name != null && (name.equals("__dart_stack_check")
+        || name.equals("__dart_array_barrier") || name.startsWith("__dart_barrier_x")
+        || name.equals("__dart_mint") || name.equals("__dart_mint_fpu")
+        || name.equals("__dart_guard") || name.equals("__dart_guard_fpu"));
+  }
+
   /**
    * Callers of Ghidra's override API may add a second symbol
    * instead of replacing the original. Withdraw only our fingerprinted fact,

@@ -18,7 +18,8 @@ public class ShowDartValueUses extends GhidraScript {
       return;
     }
     var uses = DartValueAnalyzer.uses(currentProgram, function);
-    if (uses.isEmpty()) {
+    var objects = DartValueAnalyzer.objectUses(currentProgram, function);
+    if (uses.isEmpty() && objects.isEmpty()) {
       println("No saved value uses. Run Dart Value Uses analysis on this function.");
       return;
     }
@@ -31,6 +32,14 @@ public class ShowDartValueUses extends GhidraScript {
               + Long.toUnsignedString(use.value() < 0 ? -use.value() : use.value(), 16);
       println(use.site() + "  " + use.kind() + "[" + use.input() + "]  "
           + use.width() + " bytes  " + value);
+    }
+    for (var use : objects) {
+      monitor.checkCancelled();
+      var address = currentProgram.getAddressFactory().getAddress(use.declaration());
+      var symbol = address == null ? null : currentProgram.getSymbolTable().getPrimarySymbol(address);
+      String declaration = symbol == null ? use.declaration() : symbol.getName(true);
+      println(use.site() + "  " + use.kind() + "  " + declaration
+          + (use.value().isEmpty() ? "" : " [physical input " + use.value() + "]"));
     }
   }
 }

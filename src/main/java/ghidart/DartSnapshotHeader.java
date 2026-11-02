@@ -43,6 +43,8 @@ public final class DartSnapshotHeader {
   public final int clusterDataStart;
   public final DartVersionProfile profile;
   public final boolean isVm;
+  public final boolean isLoadingUnit;
+  public final Long programHash;
 
   // Clustered Snapshot Header fields
   public final long numBaseObjects;
@@ -65,6 +67,8 @@ public final class DartSnapshotHeader {
     this.clusterDataStart = b.clusterDataStart;
     this.profile = b.profile;
     this.isVm = b.isVm;
+    this.isLoadingUnit = b.isLoadingUnit;
+    this.programHash = b.programHash;
 
     this.numBaseObjects = b.numBaseObjects;
     this.numObjects = b.numObjects;
@@ -116,6 +120,28 @@ public final class DartSnapshotHeader {
 
   public static DartSnapshotHeader parse(
       byte[] data, int offset, DartVersionProfile profile, boolean isVm) throws IOException {
+    return parse(data, offset, profile, isVm, true);
+  }
+
+  /** Read only the common envelope; no hash or version-specific counts are needed. */
+  public static DartSnapshotHeader inspect(byte[] data, int offset, boolean isVm)
+      throws IOException {
+    return parse(data, offset, null, isVm, false);
+  }
+
+  /** A non-root unit has an additional program-identity word before its counts. */
+  public static DartSnapshotHeader parseLoadingUnit(byte[] data, int offset,
+      DartVersionProfile profile) throws IOException {
+    return parse(data, offset, profile, false, true, true);
+  }
+
+  private static DartSnapshotHeader parse(byte[] data, int offset, DartVersionProfile profile,
+      boolean isVm, boolean clustered) throws IOException {
+    return parse(data, offset, profile, isVm, clustered, false);
+  }
+
+  private static DartSnapshotHeader parse(byte[] data, int offset, DartVersionProfile profile,
+      boolean isVm, boolean clustered, boolean unit) throws IOException {
     if (data == null || offset < 0 || offset > data.length - 0x35) {
       throw new IllegalArgumentException("Invalid snapshot data or offset: " + offset);
     }
@@ -134,6 +160,7 @@ public final class DartSnapshotHeader {
     Builder b = new Builder();
     b.snapshotOffset = offset;
     b.isVm = isVm;
+    b.isLoadingUnit = unit;
     b.length = s.readInt64();
     if (b.length < 0x31 || b.length > data.length - offset - 4L) {
       throw new IOException("snapshot declared extent is outside input");
@@ -165,6 +192,7 @@ public final class DartSnapshotHeader {
     b.numBaseObjects = s.readUnsigned();
     s.setPosition(savedPos);
 
+    if (!clustered) return b.build();
     if (profile == null) {
       DartSnapshotHeader prelim = b.build();
       profile = DartVersionProfile.detect(prelim, data);
@@ -182,6 +210,7 @@ public final class DartSnapshotHeader {
     Builder b = new Builder();
     b.snapshotOffset = this.snapshotOffset;
     b.isVm = this.isVm;
+    b.isLoadingUnit = this.isLoadingUnit;
     b.length = this.length;
     b.totalSize = this.totalSize;
     b.kind = this.kind;
@@ -195,6 +224,7 @@ public final class DartSnapshotHeader {
   private static DartSnapshotHeader parseClusteredHeader(
       byte[] data, Builder b, DartVersionProfile profile) throws IOException {
     DartStream s = new DartStream(data, b.clusterDataStart, (int) (b.snapshotOffset + b.totalSize - b.clusterDataStart));
+    if (b.isLoadingUnit) b.programHash = Integer.toUnsignedLong(s.readTagged32());
     b.numBaseObjects = s.readUnsigned();
     b.numObjects = s.readUnsigned();
 
@@ -240,6 +270,8 @@ public final class DartSnapshotHeader {
   public static final class Builder {
     int snapshotOffset;
     boolean isVm;
+    boolean isLoadingUnit;
+    Long programHash;
     long length;
     long totalSize;
     int kind;

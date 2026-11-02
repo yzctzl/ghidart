@@ -38,7 +38,7 @@ public final class DartVersionProfile {
   public final CodeFormat codeEncoding;
 
   /** Class::from()..to_snapshot(FullAOT), product layouts in SDK raw_object.h. */
-  public record ClassLayout(int library, int declarationType, int allocationStub) {}
+  public record ClassLayout(int library, int declarationType, int allocationStub, int superType) {}
   public final ClassLayout classLayout;
 
   /** SDK InstructionsSection::HeaderSize rounds its five ARM64 words to this alignment. */
@@ -63,12 +63,15 @@ public final class DartVersionProfile {
   public final boolean hasTypeParamClassId;
   public final boolean typeParamByteScalars;
   public final boolean oldTypeScalars;
+  public final int typeClassIdShift;
+  public final int fieldSharedBit;
   public final boolean topLevelCid16;
   public final boolean oldPoolFormat;
   public final boolean poolTypeSwapped;
   public final boolean oldStringFormat;
   public final boolean oldTypeArgsFill;
   public final boolean oldArrayFill;
+  public final boolean serializedCanonicalSets;
   public final boolean splitCanonical;
   public final boolean preCanonicalSplit;
 
@@ -107,12 +110,15 @@ public final class DartVersionProfile {
     this.hasTypeParamClassId = b.hasTypeParamClassId;
     this.typeParamByteScalars = b.typeParamByteScalars;
     this.oldTypeScalars = b.oldTypeScalars;
+    this.typeClassIdShift = b.typeClassIdShift;
+    this.fieldSharedBit = b.fieldSharedBit;
     this.topLevelCid16 = b.topLevelCid16;
     this.oldPoolFormat = b.oldPoolFormat;
     this.poolTypeSwapped = b.poolTypeSwapped;
     this.oldStringFormat = b.oldStringFormat;
     this.oldTypeArgsFill = b.oldTypeArgsFill;
     this.oldArrayFill = b.oldArrayFill;
+    this.serializedCanonicalSets = b.serializedCanonicalSets;
     this.splitCanonical = b.splitCanonical;
     this.preCanonicalSplit = b.preCanonicalSplit;
     this.classNumRefs = b.classNumRefs;
@@ -160,12 +166,15 @@ public final class DartVersionProfile {
     b.hasTypeParamClassId = this.hasTypeParamClassId;
     b.typeParamByteScalars = this.typeParamByteScalars;
     b.oldTypeScalars = this.oldTypeScalars;
+    b.typeClassIdShift = this.typeClassIdShift;
+    b.fieldSharedBit = this.fieldSharedBit;
     b.topLevelCid16 = this.topLevelCid16;
     b.oldPoolFormat = this.oldPoolFormat;
     b.poolTypeSwapped = this.poolTypeSwapped;
     b.oldStringFormat = this.oldStringFormat;
     b.oldTypeArgsFill = this.oldTypeArgsFill;
     b.oldArrayFill = this.oldArrayFill;
+    b.serializedCanonicalSets = this.serializedCanonicalSets;
     b.splitCanonical = this.splitCanonical;
     b.preCanonicalSplit = this.preCanonicalSplit;
     b.classNumRefs = this.classNumRefs;
@@ -192,7 +201,7 @@ public final class DartVersionProfile {
   private static final class Builder {
     String dartVersion;
     CodeFormat codeEncoding = CodeFormat.INSTRUCTIONS_TABLE;
-    ClassLayout classLayout = new ClassLayout(7, 11, -1);
+    ClassLayout classLayout = new ClassLayout(7, 11, -1, 9);
     int instructionSectionPayloadAlignment = 4;
     boolean supported = true;
     int headerFields = 5;
@@ -204,12 +213,15 @@ public final class DartVersionProfile {
     boolean hasTypeParamClassId = false;
     boolean typeParamByteScalars = false;
     boolean oldTypeScalars = false;
+    int typeClassIdShift = 4;
+    int fieldSharedBit = -1;
     boolean topLevelCid16 = false;
     boolean oldPoolFormat = false;
     boolean poolTypeSwapped = false;
     boolean oldStringFormat = false;
     boolean oldTypeArgsFill = false;
     boolean oldArrayFill = false;
+    boolean serializedCanonicalSets = true;
     boolean splitCanonical = false;
     boolean preCanonicalSplit = false;
 
@@ -241,7 +253,7 @@ public final class DartVersionProfile {
   private static final Map<String, String> KNOWN_HASHES = new HashMap<>();
 
   /** Canonical version profiles from 2.10.0 to 3.13.x+. */
-  private static final Map<String, DartVersionProfile> PROFILES = new HashMap<>();
+  private static final Map<String, DartVersionProfile> PROFILES = new java.util.LinkedHashMap<>();
 
   static {
     // Dart 2.10–2.13
@@ -313,7 +325,7 @@ public final class DartVersionProfile {
     layout.oldStringFormat = true;
     layout.preCanonicalSplit = true;
     layout.classNumRefs = 16;
-    layout.classLayout = new ClassLayout(8, 13, 15);
+    layout.classLayout = new ClassLayout(8, 13, 15, 10);
     layout.classHasTokenPos = true;
     layout.funcNumRefs = 7;
     layout.typeNumRefs = 5;
@@ -330,11 +342,11 @@ public final class DartVersionProfile {
 
     // SDK 2.13.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
     layout.headerFields = 5;
-    layout.cids = DartClassId.CIDS_V2_13;
+    layout.cids = DartClassId.CIDS_V2_12;
     layout.splitCanonical = true;
     layout.preCanonicalSplit = false;
     layout.classNumRefs = 15;
-    layout.classLayout = new ClassLayout(8, 12, 14);
+    layout.classLayout = new ClassLayout(8, 12, 14, 10);
     layout.funcNumRefs = 5;
     layout.typeNumRefs = 4;
     layout.typeHasTokenPos = false;
@@ -344,6 +356,11 @@ public final class DartVersionProfile {
     layout.codeStateBitsAtEnd = false;
     layout.closureDataNumRefs = 3;
     layout.scriptHasFlags = false;
+    // SDK 2.12 has split canonical clusters but rebuilds canonical sets after loading.
+    layout.serializedCanonicalSets = false;
+    register("2.12.0", layout);
+    layout.cids = DartClassId.CIDS_V2_13;
+    layout.serializedCanonicalSets = true;
     register("2.13.0", layout);
 
     // SDK 2.14.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
@@ -352,7 +369,7 @@ public final class DartVersionProfile {
     layout.compressedPointers = true;
     layout.splitCanonical = false;
     layout.classNumRefs = 13;
-    layout.classLayout = new ClassLayout(7, 11, -1);
+    layout.classLayout = new ClassLayout(7, 11, -1, 9);
     layout.classHasTokenPos = false;
     layout.funcNumRefs = 4;
     layout.funcTypeOldScalars = false;
@@ -422,6 +439,10 @@ public final class DartVersionProfile {
     // SDK 3.5.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
     // SDK object.h: kPayloadAlignment = 32 replaces kBarePayloadAlignment = 4.
     layout.instructionSectionPayloadAlignment = 32;
+    // raw_object.h: NullabilityBits shrinks from two bits to one, below TypeStateBits.
+    layout.typeClassIdShift = 3;
+    // object.h Field::kSharedBit selects the second serialized field table.
+    layout.fieldSharedBit = 15;
     register("3.5.0", layout);
 
     // SDK 3.6.2: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
@@ -486,8 +507,22 @@ public final class DartVersionProfile {
     throw new IllegalArgumentException("unknown snapshot format hash: " + hash);
   }
 
-  /* Unknown formats are deliberately not guessed from a plausible first CID.
-   * L1 remains usable when this L2 decoder cannot establish a format. */
+  /** A hash is only a hint. Every candidate still has to decode the complete snapshot pair. */
+  public static List<DartVersionProfile> candidates(DartSnapshotHeader envelope) {
+    var candidates = new java.util.LinkedHashMap<String, DartVersionProfile>();
+    String hint = KNOWN_HASHES.get(envelope.snapshotHash);
+    if (hint != null) candidates.put(hint, forVersion(hint));
+    candidates.putAll(PROFILES);
+    return candidates.values().stream()
+        .filter(profile -> profile.aotKind() == envelope.kind)
+        .map(profile -> profile.withCompressedPointers(envelope.isCompressedPointers()))
+        .toList();
+  }
+
+  public static boolean isHashHint(DartSnapshotHeader envelope, DartVersionProfile profile) {
+    return profile.dartVersion.equals(KNOWN_HASHES.get(envelope.snapshotHash));
+  }
+
   /** Decoded cluster header tag. */
   public static final class DecodedTag {
     public final int cid;

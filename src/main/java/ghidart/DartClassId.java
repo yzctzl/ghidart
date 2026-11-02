@@ -430,7 +430,10 @@ public final class DartClassId {
   /** Dart 2.10–2.11 CID table. */
   public static final Table CIDS_V2_10;
 
-  /** Dart 2.12–2.13 CID table. */
+  /** Dart 2.12 CID table, before WeakSerializationReference was introduced. */
+  public static final Table CIDS_V2_12;
+
+  /** Dart 2.13 CID table. */
   public static final Table CIDS_V2_13;
 
   /** Dart 2.14 CID table. */
@@ -539,6 +542,78 @@ public final class DartClassId {
     b210.nativePointerCid = 0;
     b210.numPredefinedCids = 156;
     CIDS_V2_10 = b210.build();
+
+    Builder b212 = new Builder();
+    b212.clazz = 4;
+    b212.patchClass = 5;
+    b212.function = 6;
+    b212.closureData = 7;
+    b212.ffiTrampolineData = 8;
+    b212.field = 9;
+    b212.script = 10;
+    b212.library = 11;
+    b212.namespace = 12;
+    b212.kernelProgramInfo = 13;
+    b212.weakSerializationReference = 74;
+    b212.code = 14;
+    b212.objectPool = 17;
+    b212.pcDescriptors = 18;
+    b212.codeSourceMap = 19;
+    b212.compressedStackMaps = 20;
+    b212.exceptionHandlers = 22;
+    b212.localVarDescriptors = 21;
+    b212.context = 23;
+    b212.contextScope = 24;
+    b212.singleTargetCache = 25;
+    b212.unlinkedCall = 26;
+    b212.monomorphicSmiableCall = 27;
+    b212.callSiteData = 28;
+    b212.icData = 29;
+    b212.megamorphicCache = 30;
+    b212.subtypeTestCache = 31;
+    b212.loadingUnit = 32;
+    b212.languageError = 35;
+    b212.apiError = 34;
+    b212.unwindError = 37;
+    b212.unhandledException = 36;
+    b212.instance = 38;
+    b212.libraryPrefix = 39;
+    b212.typeArguments = 40;
+    b212.type = 42;
+    b212.functionType = 43;
+    b212.typeRef = 44;
+    b212.typeParameter = 45;
+    b212.closure = 46;
+    b212.mint = 50;
+    b212.doubleCid = 51;
+    b212.growableObjectArray = 53;
+    b212.float32x4 = 54;
+    b212.int32x4 = 55;
+    b212.float64x2 = 56;
+    b212.typedData = 58;
+    b212.externalTypedData = 59;
+    b212.typedDataView = 60;
+    b212.capability = 63;
+    b212.receivePort = 64;
+    b212.sendPort = 65;
+    b212.stackTrace = 66;
+    b212.regExp = 67;
+    b212.weakProperty = 68;
+    b212.map = 70;
+    b212.futureOr = 71;
+    b212.userTag = 72;
+    b212.transferableTypedData = 73;
+    b212.array = 75;
+    b212.immutableArray = 76;
+    b212.string = 77;
+    b212.oneByteString = 78;
+    b212.twoByteString = 79;
+    b212.typedDataInt8ArrayCid = 100;
+    b212.byteDataViewCid = 142;
+    b212.typedDataCidStride = 3;
+    b212.nativePointerCid = 0;
+    b212.numPredefinedCids = 148;
+    CIDS_V2_12 = b212.build();
 
     Builder b213 = new Builder();
     b213.clazz = 4;

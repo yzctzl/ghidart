@@ -241,7 +241,7 @@ public final class DartStream {
   }
 
   private void checkRef(long ref) throws IOException {
-    if (ref < 0 || ref > maxRef) throw new IOException("reference outside snapshot: " + ref);
+    if (ref <= 0 || ref > maxRef) throw new IOException("reference outside snapshot: " + ref);
   }
 
   private void require(int count) throws IOException {

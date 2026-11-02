@@ -32,7 +32,11 @@ public final class DartClusterParser {
   /** Root references are scoped snapshot IDs; dispatch entries remain Code indices. */
   public record RootData(Map<String, Integer> references, int[] staticFields,
       int[] sharedStaticFields, int firstCodeRef, long[] dispatchCodeIndices,
-      int endOffset) {
+      int endOffset, UnitData unit) {
+    public RootData(Map<String, Integer> references, int[] staticFields,
+        int[] sharedStaticFields, int firstCodeRef, long[] dispatchCodeIndices, int endOffset) {
+      this(references, staticFields, sharedStaticFields, firstCodeRef, dispatchCodeIndices, endOffset, null);
+    }
     public RootData {
       references = Collections.unmodifiableMap(new java.util.LinkedHashMap<>(references));
       staticFields = staticFields.clone();
@@ -42,6 +46,16 @@ public final class DartClusterParser {
     @Override public int[] staticFields() { return staticFields.clone(); }
     @Override public int[] sharedStaticFields() { return sharedStaticFields.clone(); }
     @Override public long[] dispatchCodeIndices() { return dispatchCodeIndices.clone(); }
+  }
+
+  /** Updates to inherited identities, not newly allocated objects in this unit. */
+  public record UnitData(int firstCodeRef, int codeCount, Map<Integer, Integer> poolUpdates,
+      Map<Integer, Integer> codeSourceMaps, Map<Integer, Integer> codeStackMaps) {
+    public UnitData {
+      poolUpdates = Map.copyOf(poolUpdates);
+      codeSourceMaps = Map.copyOf(codeSourceMaps);
+      codeStackMaps = Map.copyOf(codeStackMaps);
+    }
   }
 
   public enum AllocKind {
@@ -224,6 +238,7 @@ public final class DartClusterParser {
     public final int refId;
     public final int nameRefId;
     public final int libraryRefId;
+    public final int superTypeRefId;
     public final int declarationTypeRefId;
     public final int allocationStubRefId;
     public final int classId;
@@ -236,6 +251,7 @@ public final class DartClusterParser {
         int refId,
         int nameRefId,
         int libraryRefId,
+        int superTypeRefId,
         int declarationTypeRefId,
         int allocationStubRefId,
         int classId,
@@ -245,6 +261,7 @@ public final class DartClusterParser {
       this.refId = refId;
       this.nameRefId = nameRefId;
       this.libraryRefId = libraryRefId;
+      this.superTypeRefId = superTypeRefId;
       this.declarationTypeRefId = declarationTypeRefId;
       this.allocationStubRefId = allocationStubRefId;
       this.classId = classId;
@@ -275,15 +292,26 @@ public final class DartClusterParser {
     public final int ownerRefId;
     public final int kindBits;
     public final int hostOffsetOrRef;
+    /** Legacy initial value, or a Smi carrying an offset/static field ID; not a byte offset. */
+    public final int valueOrOffsetRefId;
+    /** Inline field ID in older formats; -1 when absent or carried by the Smi reference. */
+    public final long staticFieldId;
 
-    public FieldInfo(int refId, int nameRefId, int ownerRefId, int kindBits, int hostOffsetOrRef) {
+    public FieldInfo(int refId, int nameRefId, int ownerRefId, int kindBits,
+        int valueOrOffsetRefId, long staticFieldId) {
       this.refId = refId;
       this.nameRefId = nameRefId;
       this.ownerRefId = ownerRefId;
       this.kindBits = kindBits;
-      this.hostOffsetOrRef = hostOffsetOrRef;
+      this.hostOffsetOrRef = ((kindBits >>> 1) & 1) != 0 ? -1 : valueOrOffsetRefId;
+      this.valueOrOffsetRefId = valueOrOffsetRefId;
+      this.staticFieldId = staticFieldId;
     }
   }
+
+  /** Snapshot storage only: a static initial value can change after loading. */
+  public record FieldStorage(boolean isStatic, boolean shared, Long offsetOrId,
+      Integer initialValueRef) {}
 
   public static final class CodeEntry {
     public final int refId;
@@ -418,6 +446,7 @@ public final class DartClusterParser {
     public final Map<Integer, NamedObject> namedByRef;
     public final Map<Integer, Integer> cidByRef;
     public final Map<Integer, String> classNameByCid;
+    public final Map<Integer, Integer> classRefByCid;
     public final Map<Integer, String> typeNameByRef;
     public final Map<Integer, String> functionNameByCodeSlot;
     public final Map<Integer, String> ownerKindByCodeSlot;
@@ -507,6 +536,7 @@ public final class DartClusterParser {
 
       DartClassId.Table ct = profile.cids;
       Map<Integer, String> cidNames = new HashMap<>();
+      Map<Integer, Integer> classRefs = new HashMap<>();
       for (int c = 1; c < ct.numPredefinedCids; c++) {
         String cn = ct.nameOf(c);
         if (!cn.startsWith("CID_")) {
@@ -515,6 +545,7 @@ public final class DartClusterParser {
       }
       if (vmResult != null) {
         cidNames.putAll(vmResult.classNameByCid);
+        classRefs.putAll(vmResult.classRefByCid);
       }
       Map<Integer, String> tNameMap = new HashMap<>();
       if (vmResult != null) {
@@ -522,6 +553,7 @@ public final class DartClusterParser {
       }
       Map<Integer, String> allocStubClassByCodeRef = new HashMap<>();
       for (ClassInfo ci : classes) {
+        classRefs.put(ci.classId, ci.refId);
         String cn = resolveString(ci.nameRefId, sMap, vmResult);
         if (cn != null && !cn.isEmpty()) {
           cidNames.put(ci.classId, cn);
@@ -534,12 +566,13 @@ public final class DartClusterParser {
         }
       }
       this.classNameByCid = Collections.unmodifiableMap(cidNames);
+      this.classRefByCid = Collections.unmodifiableMap(classRefs);
 
       for (TypeInfo ti : types) {
         if (tNameMap.containsKey(ti.refId)) {
           continue;
         }
-        String resolvedType = resolveTypeName(ti, profile, cidNames, nMap, sMap, mintValues, vmResult);
+        String resolvedType = cidNames.get(typeClassId(ti, profile, mintValues, vmResult));
         if (resolvedType != null && !resolvedType.isEmpty()) {
           tNameMap.put(ti.refId, resolvedType);
         }
@@ -566,7 +599,7 @@ public final class DartClusterParser {
         if (ce.ownerRef > 1) {
           NamedObject owner = nMap.get(ce.ownerRef);
           if (owner == null && vmResult != null) {
-            owner = vmResult.namedByRef.get(ce.ownerRef);
+            owner = vmResult.named(ce.ownerRef);
           }
           Integer ownerCid = cMap.get(ce.ownerRef);
           if (ownerCid == null && vmResult != null) {
@@ -604,11 +637,11 @@ public final class DartClusterParser {
             fnName = "TypeTestingStub_" + ct.nameOf(ownerCid) + "_" + ce.ownerRef;
           } else if ((ownerCid != null && ownerCid == ct.mint)
               || mintValues.containsKey(ce.ownerRef)
-              || (vmResult != null && vmResult.mintValues.containsKey(ce.ownerRef))) {
+              || (vmResult != null && vmResult.integer(ce.ownerRef) != null)) {
             ownerKind = "Mint";
             Long mv = mintValues.get(ce.ownerRef);
             if (mv == null && vmResult != null) {
-              mv = vmResult.mintValues.get(ce.ownerRef);
+              mv = vmResult.integer(ce.ownerRef);
             }
             if (mv != null) {
               String mintClass = cidNames.get(mv.intValue());
@@ -743,53 +776,197 @@ public final class DartClusterParser {
       };
     }
 
-    private static String resolveTypeName(
-        TypeInfo ti,
-        DartVersionProfile profile,
-        Map<Integer, String> cidNames,
-        Map<Integer, NamedObject> nMap,
-        Map<Integer, String> sMap,
-        Map<Integer, Long> mintValues,
-        Result vmResult) {
-      if (profile.typeClassIdIsRef) {
-        if (ti.refs != null && ti.refs.length > 1) {
-          int classRef = ti.refs[1];
-          NamedObject no = nMap.get(classRef);
-          if (no == null && vmResult != null) {
-            no = vmResult.namedByRef.get(classRef);
-          }
-          if (no != null) {
-            String qn = resolveQualifiedName(no, sMap, nMap, vmResult);
-            if (qn != null && !qn.isEmpty()) {
-              return qn;
-            }
-          }
-          Long mv = mintValues.get(classRef);
-          if (mv == null && vmResult != null) {
-            mv = vmResult.mintValues.get(classRef);
-          }
-          if (mv != null && cidNames.containsKey(mv.intValue())) {
-            return cidNames.get(mv.intValue());
-          }
-          if (cidNames.containsKey(classRef)) {
-            return cidNames.get(classRef);
-          }
-        }
-      } else if (ti.scalars != null && ti.scalars.length > 0) {
-        long raw = ti.scalars[0];
-        int cid = profile.oldTypeScalars ? (int) raw : (int) (raw >>> 4);
-        if (cidNames.containsKey(cid)) {
-          return cidNames.get(cid);
-        }
-        int altCid = (int) (raw >>> 3);
-        if (cidNames.containsKey(altCid)) {
-          return cidNames.get(altCid);
-        }
-        if (cidNames.containsKey((int) raw)) {
-          return cidNames.get((int) raw);
-        }
+    /** Resolve an inherited identity through the loading-unit parent chain. */
+    public ObjectData object(int ref) {
+      for (Result scope = this; scope != null; scope = scope.vm) {
+        var value = scope.objects.get(ref);
+        if (value != null) return value;
       }
       return null;
+    }
+
+    public List<Integer> exceptionEntries(int ref) {
+      for (Result scope = this; scope != null; scope = scope.vm) {
+        var entries = scope.exceptionEntries.get(ref);
+        if (entries != null) return entries;
+      }
+      return List.of();
+    }
+
+    public NamedObject named(int ref) {
+      for (Result scope = this; scope != null; scope = scope.vm) {
+        var value = scope.namedByRef.get(ref);
+        if (value != null) return value;
+      }
+      return null;
+    }
+
+    public Long integer(int ref) {
+      for (Result scope = this; scope != null; scope = scope.vm) {
+        var value = scope.mintValues.get(ref);
+        if (value != null) return value;
+      }
+      return null;
+    }
+
+    /** Readable primitive value; the retained scalar bits remain authoritative.
+     * A tagged slot still holds an object/Smi reference, not this native number.
+     */
+    public String numericValue(int ref) {
+      Long integer = integer(ref);
+      if (integer != null) return "int " + integer;
+      var value = object(ref);
+      if (value != null && value.cid() == profile.cids.doubleCid
+          && value.scalars().length > 0) {
+        long bits = value.scalars()[0];
+        return "double " + Double.longBitsToDouble(bits) + " (bits=0x"
+            + Long.toHexString(bits) + ")";
+      }
+      return null;
+    }
+
+    public String string(int ref) {
+      return resolveString(ref, stringByRef, vm);
+    }
+
+    /** Local pools plus the inherited global pool as patched for this image. */
+    public List<PoolEntry> imagePoolEntries() {
+      if (!header.isLoadingUnit) return poolEntries;
+      var entries = new ArrayList<>(poolEntries);
+      Integer global = roots.references().get("object_store.global_object_pool");
+      if (global != null && !pools.containsKey(global)) entries.addAll(globalPool());
+      return List.copyOf(entries);
+    }
+
+    /** The effective global pool includes parent slots and this unit's patches. */
+    public List<PoolEntry> globalPool() {
+      Integer ref = roots == null ? null : roots.references().get("object_store.global_object_pool");
+      if (ref == null) return List.of();
+      var local = pools.get(ref);
+      if (local != null) return local;
+      if (vm == null || roots.unit() == null) return List.of();
+      var result = new ArrayList<>(vm.globalPool());
+      for (var update : roots.unit().poolUpdates().entrySet()) {
+        var old = result.get(update.getKey());
+        result.set(update.getKey(), new PoolEntry(old.poolRef, old.index, old.bits,
+            old.kind, update.getValue(), old.imm));
+      }
+      return List.copyOf(result);
+    }
+
+    /** Resolves Field storage without treating serialized reference IDs as offsets. */
+    public FieldStorage fieldStorage(FieldInfo field) {
+      boolean isStatic = (field.kindBits & 2) != 0;
+      boolean shared = isStatic && profile.fieldSharedBit >= 0
+          && (field.kindBits & (1 << profile.fieldSharedBit)) != 0;
+      Long offsetOrId = field.staticFieldId >= 0 ? Long.valueOf(field.staticFieldId)
+          : mintValues.get(field.valueOrOffsetRefId);
+      if (offsetOrId == null && vm != null) {
+        offsetOrId = vm.integer(field.valueOrOffsetRefId);
+      }
+      Integer initialValue = null;
+      if (isStatic && field.staticFieldId >= 0) {
+        // Older Field Fill stores the initial value directly, then the field ID.
+        initialValue = field.valueOrOffsetRefId;
+      } else if (isStatic && roots != null && offsetOrId != null) {
+        int[] values = shared ? roots.sharedStaticFields : roots.staticFields;
+        if (offsetOrId >= 0 && offsetOrId < values.length) {
+          initialValue = values[offsetOrId.intValue()];
+        }
+      }
+      // Field::TargetOffsetOf serializes words, not bytes (also in SDK 2.10
+      // RawField::target_offset_). Static values are field-table IDs instead.
+      if (!isStatic && offsetOrId != null) {
+        try {
+          offsetOrId = Math.multiplyExact(offsetOrId, profile.compressedPointers ? 4L : 8L);
+        } catch (ArithmeticException e) {
+          throw new IllegalArgumentException("Field target byte offset overflows: " + field.refId, e);
+        }
+      }
+      return new FieldStorage(isStatic, shared, offsetOrId, initialValue);
+    }
+
+    /** SDK GetCodeByIndex: retained Code identity, or null for a discarded entry.
+     * Deferred Codes still have identities even though their instructions are external.
+     * Non-root units bias local indices by the complete parent reference count.
+     */
+    public Integer codeReference(long index, int firstEntryWithCode) throws IOException {
+      if (profile.codeTextOffsetDelta) {
+        var code = index > 0 && index <= Integer.MAX_VALUE ? object((int) index) : null;
+        if (code == null || code.cid() != profile.cids.code) {
+          throw new IOException("Function Code reference is not a Code: " + index);
+        }
+        return (int) index;
+      }
+      if (index < 0) throw new IOException("negative Function code index");
+      if (index == 0) {
+        // Merged snapshots explicitly serialize the LazyCompile identity.
+        // Earlier formats provide only the role; do not guess a VM stub slot.
+        for (var scope = this; scope != null; scope = scope.vm) {
+          for (var cluster : scope.clusters) {
+            if (cluster.cid == profile.cids.code && cluster.lazyCompileRef > 0) {
+              return cluster.lazyCompileRef;
+            }
+          }
+        }
+        return null;
+      }
+      long ordinal = index - 1;
+      if (header.isLoadingUnit) {
+        if (ordinal < header.numBaseObjects) {
+          var code = ordinal > 0 ? object((int) ordinal) : null;
+          if (code == null || code.cid() != profile.cids.code) {
+            throw new IOException("inherited Function code index is not a Code: " + index);
+          }
+          return (int) ordinal;
+        }
+        ordinal -= header.numBaseObjects;
+      }
+      if (ordinal < firstEntryWithCode) return null;
+      ordinal -= firstEntryWithCode;
+      for (var cluster : clusters) {
+        if (cluster.cid != profile.cids.code) continue;
+        if (ordinal < cluster.count) return cluster.startRef + (int) ordinal;
+        break;
+      }
+      throw new IOException("Function code index outside Code cluster: " + index);
+    }
+
+    /** Returns the serialized Type's class ID, not its object-reference ID. */
+    public Integer typeClassId(TypeInfo type) {
+      return typeClassId(type, profile, mintValues, vm);
+    }
+
+    private static Integer typeClassId(
+        TypeInfo type,
+        DartVersionProfile profile,
+        Map<Integer, Long> mintValues,
+        Result vmResult) {
+      long value;
+      if (profile.typeClassIdIsRef) {
+        // Older Type objects serialize type_class_id_ as a Smi reference.
+        if (type.refs == null || type.refs.length < 2) {
+          return null;
+        }
+        int ref = type.refs[1];
+        Long classId = mintValues.get(ref);
+        if (classId == null && vmResult != null) {
+          classId = vmResult.integer(ref);
+        }
+        if (classId == null) {
+          return null;
+        }
+        value = classId;
+      } else {
+        if (type.scalars == null || type.scalars.length == 0) {
+          return null;
+        }
+        value = type.scalars[0];
+        if (!profile.oldTypeScalars) {
+          value >>>= profile.typeClassIdShift;
+        }
+      }
+      return value >= 0 && value <= Integer.MAX_VALUE ? (int) value : null;
     }
 
     private static String resolveString(
@@ -802,7 +979,7 @@ public final class DartClusterParser {
         return s;
       }
       if (vmResult != null) {
-        return vmResult.stringByRef.get(refId);
+        return vmResult.string(refId);
       }
       return null;
     }
@@ -819,7 +996,7 @@ public final class DartClusterParser {
       if (no.ownerRefId > 0) {
         NamedObject owner = nMap.get(no.ownerRefId);
         if (owner == null && vmResult != null) {
-          owner = vmResult.namedByRef.get(no.ownerRefId);
+          owner = vmResult.named(no.ownerRefId);
         }
         if (owner != null) {
           String ownerName = resolveString(owner.nameRefId, sMap, vmResult);
@@ -844,9 +1021,17 @@ public final class DartClusterParser {
   /** RO deltas are in 16-byte units; shifting first would discard high bits. */
   private static long advanceRoOffset(long offset, long delta, long imageSize) throws IOException {
     if (offset < 0 || offset > imageSize || delta < 0 || delta > (imageSize - offset) / 16) {
-      throw new IOException("RO object delta outside image");
+      throw new IOException("RO object delta outside image: offset=" + offset
+          + ", delta=" + delta + ", image size=" + imageSize);
     }
     return offset + delta * 16;
+  }
+
+  private static long advanceTextOffset(long offset, long delta) throws IOException {
+    if (delta < 0 || offset < 0 || delta > Long.MAX_VALUE - offset) {
+      throw new IOException("instruction offset overflow");
+    }
+    return offset + delta;
   }
 
   private static int checkedLength(long value) throws IOException {
@@ -881,6 +1066,24 @@ public final class DartClusterParser {
       header = header.withClusteredCounts(data, profile);
     }
     if (!header.isAot()) throw new IOException("not an AOT snapshot");
+    if (header.isLoadingUnit && (vmResult == null || vmResult.roots == null
+        || header.numBaseObjects != vmResult.header.numObjects)) {
+      throw new IOException("loading unit requires its exact parent reference table");
+    }
+    if (header.isLoadingUnit) {
+      if (profile.compressedPointers != vmResult.profile.compressedPointers
+          || header.usesBareInstructions() != vmResult.header.usesBareInstructions()) {
+        throw new IOException("loading unit target layout differs from parent");
+      }
+      Integer unitsRef = vmResult.roots.references().get("object_store.loading_units");
+      var units = unitsRef == null ? null : vmResult.object(unitsRef);
+      int[] refs = units == null ? new int[0] : units.references();
+      var hashObject = refs.length < 2 ? null : vmResult.object(refs[1]);
+      if (hashObject == null || hashObject.cid() != profile.cids.mint || hashObject.scalars().length == 0
+          || (hashObject.scalars()[0] & 0xffffffffL) != header.programHash) {
+        throw new IOException("loading unit program identity differs from parent");
+      }
+    }
     int snapshotEnd = Math.toIntExact(header.snapshotOffset + header.totalSize);
     DartStream s = new DartStream(data, header.firstClusterOffset, snapshotEnd - header.firstClusterOffset);
 
@@ -910,7 +1113,7 @@ public final class DartClusterParser {
 
       ClusterMeta cm = new ClusterMeta(i, tag.cid, tag.canonical, tag.immutable, nextRef, tagPos);
       try {
-        long count = readAllocCluster(s, cm, profile, isVm, mintValues);
+        long count = readAllocCluster(s, cm, profile, isVm, !header.isLoadingUnit, mintValues);
         if (count < 0 || count > header.numObjects - nextRef + 1) {
           throw new IOException("cluster allocations exceed declared reference table");
         }
@@ -963,6 +1166,10 @@ public final class DartClusterParser {
       for (int i = 0; i < clusters.size(); i++) {
         ClusterMeta cm = clusters.get(i);
         FillSpec spec = getFillSpec(cm.cid, cm, profile);
+        // SDK non-root units serialize strings inline, even without pointer compression.
+        if (header.isLoadingUnit && profile.cids.isString(cm.cid)) {
+          spec = new FillSpec(FillKind.STRING);
+        }
         try {
           fillOneCluster(
               data,
@@ -992,7 +1199,9 @@ public final class DartClusterParser {
         }
       }
       fillEnd = fs.position();
-      if (diags.isEmpty()) roots = readRoots(data, fs, header, profile, clusters, codes, vmResult);
+      if (diags.isEmpty()) roots = header.isLoadingUnit
+          ? readUnitRoots(fs, header, profile, codes, vmResult, runningTextOffset)
+          : readRoots(data, fs, header, profile, clusters, codes, vmResult);
     }
 
     if (!diags.isEmpty()) throw new IOException(String.join("; ", diags));
@@ -1037,6 +1246,7 @@ public final class DartClusterParser {
       Result vmResult) throws IOException {
     com.google.gson.JsonObject layout;
     com.google.gson.JsonArray names;
+    com.google.gson.JsonArray basePrefix;
     try (var input = DartClusterParser.class.getResourceAsStream("/ghidart/snapshot-roots.json")) {
       if (input == null) throw new IOException("missing SDK root descriptors");
       var layouts = com.google.gson.JsonParser.parseReader(
@@ -1045,6 +1255,8 @@ public final class DartClusterParser {
       if (layout == null) return null;
       String group = layout.get(header.isVm ? "vm" : "program").getAsString();
       names = layouts.getAsJsonObject("groups").getAsJsonArray(group);
+      basePrefix = layouts.getAsJsonObject("groups").getAsJsonArray(
+          layout.get("basePrefix").getAsString());
     }
     var refs = new java.util.LinkedHashMap<String, Integer>();
     for (var name : names) {
@@ -1069,6 +1281,17 @@ public final class DartClusterParser {
         refs.put("stub[" + slot++ + "]", ref);
       }
       if (!seen.equals(codeRefs)) throw new IOException("VM stub roots omit local Code objects");
+    }
+    // These identities are created by Object::InitOnce, not serialized clusters.
+    // The SDK prefix is data shared by layout families. Do not infer bool/null
+    // positions from a recent SDK: their order changed in merged snapshots.
+    if (header.isVm || (!header.isLoadingUnit
+        && profile.codeFormat() == DartVersionProfile.CodeFormat.MERGED_TABLE)) {
+      if (basePrefix.size() > header.numBaseObjects) {
+        throw new IOException("VM base object prefix exceeds reference table");
+      }
+      int ref = 1;
+      for (var role : basePrefix) refs.put("base." + role.getAsString(), ref++);
     }
     for (var root : refs.entrySet()) {
       if (!root.getKey().equals("object_store.global_object_pool")) continue;
@@ -1147,6 +1370,66 @@ public final class DartClusterParser {
     if (s.remaining() != 0) throw new IOException("unconsumed root data: " + s.remaining()
         + " bytes after " + profile.dartVersion + (header.isVm ? " VM" : " program"));
     return new RootData(refs, fields, shared, firstCode, dispatch, end);
+  }
+
+  /** SDK UnitDeserializationRoots: patch parent Code entries and global pool slots. */
+  private static RootData readUnitRoots(DartStream s, DartSnapshotHeader header,
+      DartVersionProfile profile, List<CodeEntry> codes, Result parent, long[] textOffset)
+      throws IOException {
+    long first = s.readUnsigned();
+    long count = s.readUnsigned();
+    if (first < 0 || count < 0 || (count == 0 && first != 0) || count > header.numBaseObjects
+        || (count != 0 && (first == 0 || first > header.numBaseObjects - count + 1))) {
+      throw new IOException("deferred Code range outside parent references");
+    }
+    var sourceMaps = new java.util.LinkedHashMap<Integer, Integer>();
+    var stackMaps = new java.util.LinkedHashMap<Integer, Integer>();
+    var inherited = new HashMap<Integer, CodeEntry>();
+    for (Result scope = parent; scope != null; scope = scope.vm) {
+      for (var code : scope.codes) inherited.putIfAbsent(code.refId, code);
+    }
+    int index = (int) codes.stream().filter(code -> code.clusterIndex >= 0).count();
+    for (int i = 0; i < count; i++) {
+      int ref = (int) first + i;
+      var old = inherited.get(ref);
+      if (old == null || old.clusterIndex >= 0) throw new IOException("unit updates non-deferred Code " + ref);
+      if (profile.codeTextOffsetDelta) textOffset[0] = advanceTextOffset(textOffset[0], s.readUnsigned());
+      long payload = s.readUnsigned();
+      // code_source_map is retained separately; the Code object itself remains
+      // owned by its original parent reference table.
+      if (profile.codeTextOffsetDelta) {
+        stackMaps.put(ref, (int) s.readRef(profile.fillRefUnsigned));
+      }
+      int sourceMap = (int) s.readRef(profile.fillRefUnsigned);
+      codes.add(new CodeEntry(ref, old.ownerRef, index++, payload, textOffset[0], old.exceptionRef));
+      // sourceMap belongs to a per-unit patch and must not disappear from facts.
+      sourceMaps.put(ref, sourceMap);
+    }
+    Integer poolRef = parent.roots.references().get("object_store.global_object_pool");
+    var pool = parent.globalPool();
+    if (poolRef == null || parent.object(poolRef) == null
+        || parent.object(poolRef).cid() != profile.cids.objectPool) {
+      throw new IOException("loading unit parent has no global ObjectPool");
+    }
+    var updates = new java.util.LinkedHashMap<Integer, Integer>();
+    // SDK 2.10 keeps deferred literals in the root pool; later writers patch them.
+    long position = profile.preCanonicalSplit ? pool.size() : s.readUnsigned();
+    if (position < 0 || position > pool.size()) {
+      throw new IOException("deferred pool start outside parent pool");
+    }
+    while (position < pool.size()) {
+      if (position < 0 || pool.get((int) position).kind != PoolEntryKind.TAGGED) {
+        throw new IOException("deferred update targets a non-tagged pool slot");
+      }
+      updates.put((int) position, (int) s.readRef(profile.fillRefUnsigned));
+      long skip = s.readUnsigned();
+      if (skip <= 0 || skip > pool.size() - position) throw new IOException("invalid deferred pool delta");
+      position += skip;
+    }
+    if (position != pool.size() || s.remaining() != 0) throw new IOException("incomplete loading-unit roots");
+    return new RootData(parent.roots.references(), parent.roots.staticFields(),
+        parent.roots.sharedStaticFields(), parent.roots.firstCodeRef(), new long[0], s.position(),
+        new UnitData((int) first, (int) count, updates, sourceMaps, stackMaps));
   }
 
   public static AllocKind classifyAlloc(int cid, DartClassId.Table ct) {
@@ -1278,7 +1561,7 @@ public final class DartClusterParser {
       DartStream s,
       ClusterMeta cm,
       DartVersionProfile profile,
-      boolean isVm,
+      boolean isVm, boolean rootUnit,
       Map<Integer, Long> mintValues)
       throws IOException {
     DartClassId.Table ct = profile.cids;
@@ -1297,21 +1580,22 @@ public final class DartClusterParser {
           return canonical + nonCanonical;
         }
         long count = readCount(s);
-        if (cm.isCanonical) {
+        if (rootUnit && cm.isCanonical && profile.serializedCanonicalSets) {
           boolean readFirst = !profile.splitCanonical || (cm.cid == ct.type);
           cm.canonicalSet = readCanonicalSet(s, (int) count, readFirst);
         }
         return count;
       }
       case STRING: {
-        if (profile.splitCanonical || !profile.compressedPointers) {
-          boolean hasCanonicalSet = cm.isCanonical && (cm.cid == ct.string);
+        if (rootUnit && (profile.splitCanonical || !profile.compressedPointers)) {
+          boolean hasCanonicalSet = rootUnit && profile.serializedCanonicalSets
+              && cm.isCanonical && cm.cid == ct.string;
           return skipRoDataAlloc(s, cm, hasCanonicalSet, !profile.splitCanonical);
         }
         long count = readCount(s);
         cm.lengths = new long[(int) count];
         for (int i = 0; i < count; i++) cm.lengths[i] = s.readUnsigned();
-        if (cm.isCanonical && !isVm) {
+        if (rootUnit && cm.isCanonical && !isVm) {
           cm.canonicalSet = readCanonicalSet(s, (int) count, true);
         }
         return count;
@@ -1352,7 +1636,7 @@ public final class DartClusterParser {
         for (int i = 0; i < count; i++) {
           cm.lengths[i] = s.readUnsigned();
         }
-        if (cm.isCanonical) {
+        if (rootUnit && cm.isCanonical && profile.serializedCanonicalSets) {
           cm.canonicalSet = readCanonicalSet(s, (int) count, !profile.splitCanonical);
         }
         return count;
@@ -1409,7 +1693,8 @@ public final class DartClusterParser {
         return count + deferred;
       }
       case RODATA:
-        return skipRoDataAlloc(s, cm, cm.isCanonical, !profile.splitCanonical);
+        return skipRoDataAlloc(s, cm,
+            rootUnit && cm.isCanonical && profile.serializedCanonicalSets, !profile.splitCanonical);
       case INSTANCE: {
         long count = readCount(s);
         cm.nextFieldOffsetInWords = s.readTagged32();
@@ -1500,6 +1785,9 @@ public final class DartClusterParser {
       return new FillSpec(FillKind.REFS, preV32 ? 3 : 2, null, -1, -1);
     }
     if (cid == ct.closureData) {
+      // Before the canonical-cluster split, closure_ is the third reference,
+      // not the packed/default-type-arguments scalar introduced afterwards.
+      if (profile.preCanonicalSplit) return new FillSpec(FillKind.REFS, 3, null, -1, -1);
       int numRefs = profile.closureDataNumRefs > 0 ? profile.closureDataNumRefs : 2;
       return new FillSpec(FillKind.REFS, numRefs, new ScalarOp[] {ScalarOp.UNSIGNED}, -1, -1);
     }
@@ -1539,7 +1827,9 @@ public final class DartClusterParser {
           -1);
     }
     if (cid == ct.namespace) {
-      return new FillSpec(FillKind.REFS, 1, null, -1, -1);
+      // Before Namespace::to_snapshot(FullAOT) narrowed to target_, all four
+      // references were retained, including show/hide filters and metadata.
+      return new FillSpec(FillKind.REFS, profile.preCanonicalSplit ? 4 : 1, null, -1, -1);
     }
     if (cid == ct.closure) {
       return new FillSpec(FillKind.REFS, 6, null, -1, -1)
@@ -2207,11 +2497,20 @@ public final class DartClusterParser {
           fieldKindBits = s.readTagged32();
           capturedScalars[si] = fieldKindBits;
         } else if (spec.isField && si == 1) {
-          int hostOff = (int) s.readRefId();
+          int hostOff = (int) s.readRef(u);
           capturedScalars[si] = hostOff;
-          boolean isStatic = ((fieldKindBits >>> 1) & 1) != 0;
+          capturedRefs = java.util.Arrays.copyOf(capturedRefs, capturedRefs.length + 1);
+          capturedRefs[capturedRefs.length - 1] = hostOff;
           fieldsOut.add(
-              new FieldInfo(ref, nameRef, ownerRef, fieldKindBits, isStatic ? -1 : hostOff));
+              new FieldInfo(ref, nameRef, ownerRef, fieldKindBits, hostOff, -1));
+        } else if (cm.cid == profile.cids.function && si == 0
+            && profile.codeTextOffsetDelta) {
+          // Legacy Function serializes a Code reference here. InstructionsTable
+          // formats replace it with a numeric code_index; those are not refs.
+          int codeRef = (int) s.readRef(u);
+          capturedScalars[si] = codeRef;
+          capturedRefs = java.util.Arrays.copyOf(capturedRefs, capturedRefs.length + 1);
+          capturedRefs[capturedRefs.length - 1] = codeRef;
         } else {
           long val = readScalar(s, op);
           capturedScalars[si] = val;
@@ -2309,6 +2608,7 @@ public final class DartClusterParser {
               ref,
               nameRef,
               libraryRef,
+              refs[layout.superType()],
               declTypeRef,
               allocStubRef,
               classId,
@@ -2347,10 +2647,14 @@ public final class DartClusterParser {
       int valOrOff = (int) s.readRef(u);
       boolean isStatic = ((kindBits >>> 1) & 1) != 0;
       long fieldId = isStatic ? s.readUnsigned() : -1;
-      objects.add(new ObjectData(ref, cm.cid, refs,
+      // The last serialized reference is an initial static value or an offset Smi.
+      // Keep it in the reference graph as well as its interpreted scalar position.
+      int[] allRefs = java.util.Arrays.copyOf(refs, refs.length + 1);
+      allRefs[refs.length] = valOrOff;
+      objects.add(new ObjectData(ref, cm.cid, allRefs,
           new long[] {kindBits, valOrOff, fieldId}, -1, 0));
       namedOut.add(new NamedObject(cm.cid, ref, nameRef, ownerRef, -1));
-      fieldsOut.add(new FieldInfo(ref, nameRef, ownerRef, kindBits, isStatic ? -1 : valOrOff));
+      fieldsOut.add(new FieldInfo(ref, nameRef, ownerRef, kindBits, valOrOff, fieldId));
       ref++;
     }
   }
@@ -2391,7 +2695,7 @@ public final class DartClusterParser {
       if (i < cm.mainCount) {
         if (profile.codeTextOffsetDelta) {
           long delta = s.readUnsigned();
-          runningTextOffset[0] += delta;
+          runningTextOffset[0] = advanceTextOffset(runningTextOffset[0], delta);
           textOff = runningTextOffset[0];
         }
         payloadInfo = s.readUnsigned();
@@ -2476,7 +2780,10 @@ public final class DartClusterParser {
               out.add(new PoolEntry(poolRef, idx++, entryBits, PoolEntryKind.NATIVE, 0, 0));
               break;
             default:
-              throw new IOException("Unknown v2 ObjectPool entry type: " + typeBits);
+              throw new IOException("Unknown v2 ObjectPool entry type: " + typeBits
+                  + " at pool " + poolRef + " slot " + idx
+                  + " after bits=" + (out.isEmpty() ? -1 : out.get(out.size()-1).bits)
+                  + " kind=" + (out.isEmpty() ? "" : out.get(out.size()-1).kind));
           }
         } else {
           int behaviorBits = entryBits >>> 5;

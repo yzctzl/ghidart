@@ -1,0 +1,86 @@
+name: Build and release
+
+on:
+  push:
+    tags:
+      - '[0-9]*'
+      - 'v[0-9]*'
+  workflow_dispatch:
+    inputs:
+      ghidra_tag:
+        description: 'Ghidra release tag (latest selects the latest stable release)'
+        default: latest
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Resolve Ghidra release
+        id: ghidra
+        uses: actions/github-script@v7
+        env:
+          GHIDRA_TAG: ${{ inputs.ghidra_tag || 'latest' }}
+        with:
+          script: |
+            const repo = {owner: 'NationalSecurityAgency', repo: 'ghidra'};
+            const tag = process.env.GHIDRA_TAG;
+            const {data: release} = tag === 'latest'
+              ? await github.rest.repos.getLatestRelease(repo)
+              : await github.rest.repos.getReleaseByTag({...repo, tag});
+            const assets = release.assets.filter(a => /^ghidra_.*_PUBLIC_\d+\.zip$/.test(a.name));
+            if (assets.length !== 1) throw new Error('Expected one official Ghidra PUBLIC ZIP');
+            const asset = assets[0];
+            core.setOutput('tag', release.tag_name);
+            core.setOutput('url', asset.browser_download_url);
+            core.setOutput('digest', asset.digest || '');
+            core.notice(`Building against ${release.tag_name}: ${asset.name}`);
+      - name: Download Ghidra
+        env:
+          GHIDRA_URL: ${{ steps.ghidra.outputs.url }}
+          GHIDRA_DIGEST: ${{ steps.ghidra.outputs.digest }}
+        run: |
+          curl --fail --location --retry 3 "$GHIDRA_URL" -o "$RUNNER_TEMP/ghidra.zip"
+          if [[ "$GHIDRA_DIGEST" == sha256:* ]]; then
+            echo "${GHIDRA_DIGEST#sha256:}  $RUNNER_TEMP/ghidra.zip" | sha256sum --check
+          fi
+          mkdir "$RUNNER_TEMP/ghidra"
+          unzip -q "$RUNNER_TEMP/ghidra.zip" -d "$RUNNER_TEMP/ghidra"
+          ghidra_dir=$(find "$RUNNER_TEMP/ghidra" -mindepth 1 -maxdepth 1 -type d -name 'ghidra_*_PUBLIC')
+          test -f "$ghidra_dir/support/buildExtension.gradle"
+          echo "GHIDRA_INSTALL_DIR=$ghidra_dir" >> "$GITHUB_ENV"
+      - name: Build extension
+        run: ./gradlew --no-daemon buildExtension
+      - name: Retain build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghidart-${{ steps.ghidra.outputs.tag }}
+          path: dist/*.zip
+          if-no-files-found: error
+      - name: Publish tag release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GHIDRA_TAG: ${{ steps.ghidra.outputs.tag }}
+        run: |
+          printf 'Built against Ghidra **%s**, using Java 25. Install the extension ZIP in the matching Ghidra version.\n\nThis is an experimental release; correctness and stability are not fully validated.\n' "$GHIDRA_TAG" > "$RUNNER_TEMP/release-notes.md"
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.zip --verify-tag \
+              --title "ghidart $GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi

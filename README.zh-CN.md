@@ -25,6 +25,10 @@ b4a 打印的类型和 IL 作为导出证据显示，不直接转换为物理 AB
 
 ## 安装
 
+预编译 ZIP 可从 [Releases](https://github.com/yzctzl/ghidart/releases) 下载，
+请使用发布说明指定的 Ghidra 版本。推送 tag 时自动使用最新稳定版 Ghidra 构建；
+手动运行工作流可指定 Ghidra 发布 tag。构建成功仅代表编译与打包通过，不代表完整运行验收。
+
 需要 Ghidra 12.2 PUBLIC、Java 25；项目自带 Gradle Wrapper。
 
 ```sh

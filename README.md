@@ -28,6 +28,11 @@ as exported evidence, not translated into physical ABI or replacement P-code.
 
 ## Installation
 
+Prebuilt ZIPs are available on [Releases](https://github.com/yzctzl/ghidart/releases).
+Use the Ghidra version stated in the release. Tag pushes build against the latest
+stable Ghidra release; manual workflow runs can select a specific Ghidra release tag.
+A successful build checks compilation and packaging, not full runtime compatibility.
+
 Requires Ghidra 12.2 PUBLIC and Java 25. A Gradle Wrapper is included.
 
 ```sh

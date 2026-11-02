@@ -30,6 +30,8 @@ public final class DartElfLoader extends ElfLoader {
   private static final List<String> SPLIT_SNAPSHOT = List.of(
       "_kDartVmSnapshotInstructions", "_kDartVmSnapshotData",
       "_kDartIsolateSnapshotInstructions", "_kDartIsolateSnapshotData");
+  private static final List<String> UNIT_SNAPSHOT = List.of(
+      "_kDartIsolateSnapshotInstructions", "_kDartIsolateSnapshotData");
   private static final List<String> SINGLE_SNAPSHOT = List.of(
       "_kDartSnapshotText", "_kDartSnapshotData");
   private static final byte[] SNAPSHOT_MAGIC = {
@@ -88,11 +90,13 @@ public final class DartElfLoader extends ElfLoader {
     // Incomplete or mixed layouts do not establish a Dart snapshot.
     boolean split = SPLIT_SNAPSHOT.stream().allMatch(symbols::containsKey);
     boolean single = SINGLE_SNAPSHOT.stream().allMatch(symbols::containsKey);
-    if (split == single
+    boolean unit = symbols.size() == UNIT_SNAPSHOT.size()
+        && UNIT_SNAPSHOT.stream().allMatch(symbols::containsKey);
+    if ((split ? 1 : 0) + (single ? 1 : 0) + (unit ? 1 : 0) != 1
         || symbols.size() != (split ? SPLIT_SNAPSHOT.size() : SINGLE_SNAPSHOT.size())) {
       return false;
     }
-    for (String name : split ? SPLIT_SNAPSHOT : SINGLE_SNAPSHOT) {
+    for (String name : split ? SPLIT_SNAPSHOT : unit ? UNIT_SNAPSHOT : SINGLE_SNAPSHOT) {
       ElfSymbol symbol = symbols.get(name);
       if (symbol == null) {
         return false;

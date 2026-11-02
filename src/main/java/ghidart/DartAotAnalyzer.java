@@ -236,6 +236,27 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
       if (existing != null) {
         AddressSet payload = new AddressSet(base.add(unit.start()), base.add(unit.end() - 1));
         if (payload.contains(existing.getBody())) {
+          // ELF debug symbols can create a one-byte placeholder, shorter than
+          // one ARM64 instruction. It is not an analyzed function body. Keep
+          // the imported name, but complete its validated instruction extent.
+          if (existing.getBody().getNumAddresses() == 1
+              && existing.getSymbol().getSource() != SourceType.USER_DEFINED
+              && existing.getSignatureSource() == SourceType.DEFAULT
+              && existing.getAllVariables().length == 0) {
+            AddressSet body = instructionBody(program, base, unit);
+            boolean overlaps = false;
+            var owners = program.getFunctionManager().getFunctionsOverlapping(body);
+            while (owners.hasNext()) {
+              if (!owners.next().equals(existing)) overlaps = true;
+            }
+            if (!overlaps && body.contains(entry)) {
+              try {
+                existing.setBody(body);
+              } catch (ghidra.program.database.function.OverlappingFunctionException e) {
+                // Another function owner always wins over an inferred extent.
+              }
+            }
+          }
           stats.functionsExisting++;
         } else {
           stats.functionsSkipped++;

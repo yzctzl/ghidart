@@ -5,6 +5,7 @@ import ghidra.app.services.AbstractAnalyzer;
 import ghidra.app.services.AnalysisPriority;
 import ghidra.app.services.AnalyzerType;
 import ghidra.app.util.importer.MessageLog;
+import ghidra.framework.options.Options;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.data.QWordDataType;
@@ -30,7 +31,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Optional L2 producer: validate serialized AOT facts before touching the database.
+ * L2 producer: validate serialized AOT facts before touching the database.
  *
  * <p>L1 never invokes this reader. ELF and Mach-O supply the same mapped snapshot
  * symbols. Parsed strings retain their serialized byte addresses, while logical
@@ -41,8 +42,10 @@ import java.util.Set;
 public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
   private static final String FACTS = "ghidart.L2.objects.v1";
   private static final String OWNER = "ghidart.L2";
-  private static final int FACT_GENERATION = 5;
+  private static final int FACT_GENERATION = 10;
   private static final Gson JSON = new Gson();
+  private static final String PARENT_FILE = "Parent AOT file";
+  private String parentFile = "";
 
   record Snapshot(String scope, Address data, Address instructions, byte[] bytes,
       DartClusterParser.Result objects, DartInstructionsTable table,
@@ -62,7 +65,18 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
 
   @Override
   public boolean getDefaultEnablement(Program program) {
-    return false;
+    return canAnalyze(program);
+  }
+
+  @Override
+  public void registerOptions(Options options, Program program) {
+    options.registerOption(PARENT_FILE, "", null,
+        "Parent AOT binary for a non-root loading unit. Empty uses the standard sibling filename.");
+  }
+
+  @Override
+  public void optionsChanged(Options options, Program program) {
+    parentFile = options.getString(PARENT_FILE, "");
   }
 
   @Override
@@ -70,7 +84,8 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       throws CancelledException {
     try (var output = new DartAnalysisLog(program, log)) {
       try {
-        List<Snapshot> snapshots = read(program, monitor);
+        List<Snapshot> snapshots = DartLoadingUnits.isUnit(program, parentFile)
+            ? DartLoadingUnits.read(program, parentFile, monitor) : read(program, monitor);
         if (snapshots.isEmpty()) {
           output.messages().appendMsg(getName(), "No mapped AOT snapshot symbols; L1 remains available.");
           return true;
@@ -95,14 +110,84 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     }
   }
 
-  private static List<Snapshot> read(Program program, TaskMonitor monitor)
+  static List<Snapshot> read(Program program, TaskMonitor monitor)
+      throws IOException, MemoryAccessException, CancelledException {
+    Address data = symbol(program, "kDartVmSnapshotData");
+    if (data == null) data = symbol(program, "kDartIsolateSnapshotData");
+    if (data == null) data = symbol(program, "kDartSnapshotData");
+    if (data == null) return List.of();
+    var envelope = DartSnapshotHeader.inspect(clusteredBytes(program, data), 0, false);
+    List<Snapshot> selected = null;
+    String interpretation = null;
+    var failures = new ArrayList<String>();
+    for (var profile : DartVersionProfile.candidates(envelope)) {
+      monitor.checkCancelled();
+      List<Snapshot> candidate;
+      try {
+        candidate = read(program, profile, monitor);
+      } catch (IOException | IllegalArgumentException | MemoryAccessException e) {
+        failures.add(profile.dartVersion + ": " + e.getMessage());
+        continue;
+      }
+      // A matching hash is an optimization only after complete decoding and validation.
+      if (DartVersionProfile.isHashHint(envelope, profile)) return candidate;
+      String facts = interpretation(candidate);
+      if (selected != null && !interpretation.equals(facts)) {
+        throw new IOException("ambiguous AOT layouts: "
+            + selected.getFirst().objects().profile.dartVersion + " / " + profile.dartVersion);
+      }
+      if (selected == null) {
+        selected = candidate;
+        interpretation = facts;
+      }
+    }
+    if (selected != null) return selected;
+    throw new IOException("no validated AOT format (" + String.join("; ", failures) + ")");
+  }
+
+  /** Compare retained meanings, not candidate version labels or a plausible first cluster. */
+  private static String interpretation(List<Snapshot> snapshots) throws IOException {
+    var factsJson = new com.google.gson.GsonBuilder()
+        .addSerializationExclusionStrategy(new com.google.gson.ExclusionStrategy() {
+          @Override
+          public boolean shouldSkipClass(Class<?> type) {
+            return false;
+          }
+
+          @Override
+          public boolean shouldSkipField(com.google.gson.FieldAttributes field) {
+            return field.getDeclaringClass() == DartClusterParser.Result.class
+                && Set.of("profile", "header", "vm", "diagnostics").contains(field.getName());
+          }
+        }).create();
+    MessageDigest digest = digest();
+    try (var writer = new java.io.OutputStreamWriter(new java.security.DigestOutputStream(
+        java.io.OutputStream.nullOutputStream(), digest), java.nio.charset.StandardCharsets.UTF_8)) {
+      for (var snapshot : snapshots) {
+        var objects = snapshot.objects();
+        factsJson.toJson(objects, writer);
+        factsJson.toJson(snapshot.table(), writer);
+        // Layout-dependent interpretations must agree as well as raw records.
+        // Otherwise identical bytes could silently acquire different class/value links.
+        var typeClasses = new java.util.TreeMap<Integer, Integer>();
+        for (var type : objects.types) typeClasses.put(type.refId, objects.typeClassId(type));
+        factsJson.toJson(typeClasses, writer);
+        var fieldStorage = new java.util.TreeMap<Integer, DartClusterParser.FieldStorage>();
+        for (var field : objects.fields) fieldStorage.put(field.refId, objects.fieldStorage(field));
+        factsJson.toJson(fieldStorage, writer);
+      }
+    }
+    return HexFormat.of().formatHex(digest.digest());
+  }
+
+  private static List<Snapshot> read(Program program, DartVersionProfile profile, TaskMonitor monitor)
       throws IOException, MemoryAccessException, CancelledException {
     var result = new ArrayList<Snapshot>();
     DartClusterParser.Result vm = null;
     Address vmData = symbol(program, "kDartVmSnapshotData");
     if (vmData != null) {
       Snapshot snapshot = read(program, "vm", vmData,
-          symbol(program, "kDartVmSnapshotInstructions"), null, true, monitor);
+          symbol(program, "kDartVmSnapshotInstructions"), null, true, profile, monitor);
       result.add(snapshot);
       vm = snapshot.objects();
     }
@@ -112,22 +197,41 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       isolate = symbol(program, "kDartSnapshotData");
       instructions = symbol(program, "kDartSnapshotText");
     }
-    if (isolate != null) result.add(read(program, "isolate", isolate, instructions, vm, false, monitor));
+    if (isolate != null) result.add(read(program, "isolate", isolate, instructions, vm, false, profile, monitor));
     return List.copyOf(result);
   }
 
   private static Snapshot read(Program program, String scope, Address data, Address instructions,
-      DartClusterParser.Result vm, boolean isVm, TaskMonitor monitor)
+      DartClusterParser.Result vm, boolean isVm, DartVersionProfile profile, TaskMonitor monitor)
       throws IOException, MemoryAccessException, CancelledException {
+    return read(program, scope, data, instructions, vm, isVm, profile, monitor, false);
+  }
+
+  static Snapshot readUnit(Program program, DartClusterParser.Result parent, String parentIdentity, TaskMonitor monitor)
+      throws IOException, MemoryAccessException, CancelledException {
+    Address data = symbol(program, "kDartIsolateSnapshotData");
+    Address instructions = symbol(program, "kDartIsolateSnapshotInstructions");
+    if (data == null) {
+      data = symbol(program, "kDartSnapshotData");
+      instructions = symbol(program, "kDartSnapshotText");
+    }
+    var unit = read(program, "isolate", data, instructions, parent, false, parent.profile, monitor, true);
+    MessageDigest identity = digest();
+    identity.update(unit.identity().getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    identity.update(parentIdentity.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    return new Snapshot(unit.scope(), unit.data(), unit.instructions(), unit.bytes(), unit.objects(),
+        unit.table(), unit.units(), unit.vmReferences(), HexFormat.of().formatHex(identity.digest()));
+  }
+
+  private static Snapshot read(Program program, String scope, Address data, Address instructions,
+      DartClusterParser.Result vm, boolean isVm, DartVersionProfile profile, TaskMonitor monitor,
+      boolean unit) throws IOException, MemoryAccessException, CancelledException {
+    if (data == null) throw new IOException("missing " + scope + " data image");
     if (instructions == null) throw new IOException("missing " + scope + " instruction image");
-    monitor.setMessage("Reading Dart " + scope + " snapshot");
-    byte[] prefix = bytes(program, data, 20);
-    var stream = new DartStream(prefix);
-    if (stream.readInt32() != DartSnapshotHeader.SNAPSHOT_MAGIC) throw new IOException("snapshot magic");
-    long length = stream.readInt64();
-    if (length < 49 || length > Integer.MAX_VALUE - 4L) throw new IOException("snapshot extent");
-    byte[] clustered = bytes(program, data, (int) length + 4);
-    var header = DartSnapshotHeader.parse(clustered, 0, isVm);
+    monitor.setMessage("Reading Dart " + scope + " snapshot (layout " + profile.dartVersion + ")");
+    byte[] clustered = clusteredBytes(program, data);
+    var header = unit ? DartSnapshotHeader.parseLoadingUnit(clustered, 0, profile)
+        : DartSnapshotHeader.parse(clustered, 0, profile, isVm);
     if (header.featureFlags.stream().noneMatch(flag -> flag.equals("arm64") || flag.startsWith("arm64-"))) {
       throw new IOException("snapshot is not ARM64");
     }
@@ -163,6 +267,14 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     if (mainCodes != table.length - table.firstEntryWithCode) {
       throw new IOException("Code / instruction table cardinality differs");
     }
+    for (var declaration : objects.namedObjects) {
+      monitor.checkCancelled();
+      if (declaration.cid != objects.profile.cids.function) continue;
+      var record = objects.object(declaration.refId);
+      if (record != null && record.scalars().length > 0) {
+        objects.codeReference(record.scalars()[0], table.firstEntryWithCode);
+      }
+    }
     var units = boundaries(program, instructions, objects, table);
     MessageDigest digest = digest();
     digest.update(input);
@@ -175,8 +287,17 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       }
       digest.update(chunk, 0, count);
     }
-    return new Snapshot(scope, data, instructions, input, objects, table, units, vm != null,
+    return new Snapshot(scope, data, instructions, input, objects, table, units, vm != null && !unit,
         HexFormat.of().formatHex(digest.digest()));
+  }
+
+  private static byte[] clusteredBytes(Program program, Address data)
+      throws IOException, MemoryAccessException {
+    var stream = new DartStream(bytes(program, data, 20));
+    if (stream.readInt32() != DartSnapshotHeader.SNAPSHOT_MAGIC) throw new IOException("snapshot magic");
+    long length = stream.readInt64();
+    if (length < 49 || length > Integer.MAX_VALUE - 4L) throw new IOException("snapshot extent");
+    return bytes(program, data, (int) length + 4);
   }
 
   private static List<DartCodeIndex.CodeUnit> boundaries(Program program, Address image,
@@ -204,7 +325,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         addEntry(roles, monomorphic, "monomorphic", start, end);
         addEntry(roles, monomorphic + unchecked, "monomorphic_unchecked", start, end);
         if (primary == null) primary = normal;
-        for (int pc : objects.exceptionEntries.getOrDefault(code.exceptionRef, List.of())) {
+        for (int pc : objects.exceptionEntries(code.exceptionRef)) {
           addEntry(roles, start + pc, "exception", start, end);
         }
       }
@@ -248,7 +369,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     long rootSlots = roots == null ? 0 : (long) roots.references().size()
         + roots.staticFields().length + roots.sharedStaticFields().length
         + roots.dispatchCodeIndices().length;
-    long size = Math.multiplyExact(references + objects.poolEntries.size() + rootSlots, 8L);
+    long size = Math.multiplyExact(references + objects.imagePoolEntries().size() + rootSlots, 8L);
     // Separate serialized scopes without creating new address spaces. Ghidra
     // 12.2 leaves stale address-set ranges when an OTHER overlay is rolled back.
     // These addresses describe database identities only, never runtime pointers.
@@ -279,6 +400,24 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       identityBytes.putInt(ref * 8, ref);
       // Base references have no local cluster. Do not mislabel them as CID 0.
       identityBytes.putInt(ref * 8 + 4, -1);
+    }
+    if (objects.header.isLoadingUnit) {
+      for (var parent = objects.vm; parent != null; parent = parent.vm) {
+        for (var object : parent.objects.values()) {
+          monitor.checkCancelled();
+          identityBytes.putInt(object.refId() * 8 + 4, object.cid());
+          detail(facts, anchor.add(object.refId() * 8L), "inherited", object);
+          for (int ref : object.references()) if (ref > 0) {
+            reference(program, anchor.add(object.refId() * 8L), anchor.add(ref * 8L));
+          }
+        }
+        for (var string : parent.strings) {
+          // Parent character bytes belong to another file, not this image.
+          // Retain the complete value without inventing a local heap address.
+          detail(facts, anchor.add(string.refId * 8L), "inheritedString",
+              Map.of("value", string.value, "encoding", string.isOneByte ? "latin1" : "utf16le"));
+        }
+      }
     }
     for (var cluster : objects.clusters) {
       for (int ref = cluster.startRef; ref < cluster.stopRef; ref++) identityBytes.putInt(ref * 8 + 4, cluster.cid);
@@ -318,7 +457,14 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       facts.add(anchor.add((long) cls.refId * 8), JSON.toJson(Map.of("kind", "Class", "object", cls)));
     }
     for (var field : objects.fields) {
-      facts.add(anchor.add((long) field.refId * 8), JSON.toJson(Map.of("kind", "Field", "object", field)));
+      monitor.checkCancelled();
+      Address address = anchor.add((long) field.refId * 8);
+      facts.add(address, JSON.toJson(Map.of("kind", "Field", "object", field)));
+      var storage = objects.fieldStorage(field);
+      detail(facts, address, "storage", storage);
+      if (storage.initialValueRef() != null && storage.initialValueRef() > 0) {
+        reference(program, address, anchor.add(storage.initialValueRef() * 8L));
+      }
     }
     for (var named : objects.namedObjects) {
       monitor.checkCancelled();
@@ -330,7 +476,10 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     }
     for (var type : objects.types) {
       monitor.checkCancelled();
-      detail(facts, anchor.add((long) type.refId * 8), "type", type);
+      Address address = anchor.add((long) type.refId * 8);
+      detail(facts, address, "type", type);
+      Integer classRef = objects.classRefByCid.get(objects.typeClassId(type));
+      if (classRef != null) reference(program, address, anchor.add((long) classRef * 8));
       for (int ref : type.refs) {
         if (ref > 0) reference(program, anchor.add((long) type.refId * 8), anchor.add((long) ref * 8));
       }
@@ -347,8 +496,11 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     for (var code : objects.codes) {
       monitor.checkCancelled();
       Address object = anchor.add((long) code.refId * 8);
-      facts.add(object, JSON.toJson(Map.of("kind", "Code", "object", code)));
+      detail(facts, object, "kind", "Code");
+      detail(facts, object, "object", code);
       if (code.ownerRef > 0) reference(program, object, anchor.add((long) code.ownerRef * 8));
+      Address target = codeTarget(snapshot, code);
+      if (target != null) reference(program, object, target);
       if (code.exceptionRef > 0) reference(program, object, anchor.add((long) code.exceptionRef * 8));
       if (code.clusterIndex < 0) continue;
       int slot = code.clusterIndex + snapshot.table().firstEntryWithCode;
@@ -360,7 +512,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     }
     int position = 0;
     Map<Integer, Address> pools = new LinkedHashMap<>();
-    for (var entry : objects.poolEntries) {
+    for (var entry : objects.imagePoolEntries()) {
       monitor.checkCancelled();
       Address slot = anchor.add((references + position++) * 8);
       pools.putIfAbsent(entry.poolRef, slot);
@@ -378,13 +530,19 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     for (var pool : pools.entrySet()) {
       Address object = anchor.add((long) pool.getKey() * 8);
       reference(program, object, pool.getValue());
-      facts.add(object, JSON.toJson(Map.of("kind", "ObjectPool", "firstSlot", pool.getValue().toString())));
+      detail(facts, object, "kind", "ObjectPool");
+      detail(facts, object, "firstSlot", pool.getValue().toString());
     }
     monitor.initialize(objects.objects.size(), "Publishing Dart serialized object fields");
     for (var object : objects.objects.values()) {
       monitor.checkCancelled();
       Address address = anchor.add((long) object.refId() * 8);
       detail(facts, address, "serialized", object);
+      // Instance clusters encode their Class via CID, not a serialized reference.
+      if (object.cid() >= objects.profile.cids.numPredefinedCids) {
+        Integer classRef = objects.classRefByCid.get(object.cid());
+        if (classRef != null) reference(program, address, anchor.add((long) classRef * 8));
+      }
       for (int ref : object.references()) {
         if (ref > 0) reference(program, address, anchor.add((long) ref * 8));
       }
@@ -395,7 +553,14 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     }
     if (roots != null) {
       detail(facts, anchor, "roots", roots);
-      Address slot = anchor.add((references + objects.poolEntries.size()) * 8);
+      if (roots.unit() != null) {
+        for (var patches : List.of(roots.unit().codeSourceMaps(), roots.unit().codeStackMaps())) {
+          for (var patch : patches.entrySet()) {
+            reference(program, anchor.add(patch.getKey() * 8L), anchor.add(patch.getValue() * 8L));
+          }
+        }
+      }
+      Address slot = anchor.add((references + objects.imagePoolEntries().size()) * 8);
       monitor.initialize(rootSlots, "Publishing Dart roots and dispatch table");
       for (var root : roots.references().entrySet()) {
         rootSlot(program, facts, slot, anchor, root.getKey(), root.getValue(), true);
@@ -414,9 +579,15 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         }
       }
       long[] dispatch = roots.dispatchCodeIndices();
+      Map<Long, Address> targets = dispatchTargets(snapshot);
       for (int index = 0; index < dispatch.length; index++) {
         // These are Code indices, not snapshot reference IDs or addresses.
         rootSlot(program, facts, slot, anchor, "dispatch[" + index + "]", dispatch[index], false);
+        Address target = targets.get(dispatch[index]);
+        if (target != null) {
+          reference(program, slot, target);
+          detail(facts, slot, "target", target.toString());
+        }
         slot = slot.add(8);
         monitor.checkCancelled();
         monitor.increment();
@@ -462,7 +633,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         + " payloads (" + objects.codes.stream().filter(code -> code.clusterIndex >= 0).count()
         + " serialized Code objects), " + stats.functionsCreated + " new functions, " + stats.entryLabelsCreated
         + " entry labels, " + named + " function names, " + defined + "/" + objects.strings.size() + " string data, "
-        + objects.poolEntries.size() + " scoped pool slots, " + objects.objects.size()
+        + objects.imagePoolEntries().size() + " scoped pool slots, " + objects.objects.size()
         + " retained object records; " + rootSlots + " root/dispatch slots."
         + (roots == null ? " Root layout is not yet adapted." : " Root stream fully consumed."));
   }
@@ -476,7 +647,132 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       DartSnapshotSymbols.publish(program, snapshot, anchor, monitor, log);
       program.getOptions(OWNER).setInt(option, 1);
     }
+    String codeOption = OWNER + "." + snapshot.scope() + ".functionCodes";
+    if (program.getOptions(OWNER).getInt(codeOption, 0) != 1) {
+      publishFunctionCodes(program, snapshot, anchor, monitor);
+      program.getOptions(OWNER).setInt(codeOption, 1);
+    }
 
+  }
+
+  /** Function/Code relationships also survive when no local body is available. */
+  private static void publishFunctionCodes(Program program, Snapshot snapshot, Address anchor,
+      TaskMonitor monitor) throws IOException, CancelledException {
+    var objects = snapshot.objects();
+    var targets = fileTargets(program, snapshot);
+    var facts = property(program);
+    for (var named : objects.namedObjects) {
+      monitor.checkCancelled();
+      if (named.cid != objects.profile.cids.function) continue;
+      var record = objects.object(named.refId);
+      if (record == null || record.scalars().length == 0) continue;
+      long index = record.scalars()[0];
+      Address address = anchor.add(named.refId * 8L);
+      Integer code = objects.codeReference(index, snapshot.table().firstEntryWithCode);
+      if (code != null) reference(program, address, anchor.add(code * 8L));
+      if (!objects.profile.codeTextOffsetDelta && index == 0) {
+        detail(facts, address, "codeRole", "LazyCompile");
+      }
+      Address target = targets.get(named.refId);
+      if (target != null) reference(program, address, target);
+    }
+    if (objects.header.isLoadingUnit) for (var code : objects.codes) {
+      monitor.checkCancelled();
+      if (code.refId > objects.header.numBaseObjects) continue;
+      var owner = objects.named(code.ownerRef);
+      if (owner == null || owner.cid != objects.profile.cids.function) continue;
+      Address address = anchor.add(owner.refId * 8L);
+      reference(program, address, anchor.add(code.refId * 8L));
+      Address target = targets.get(owner.refId);
+      if (target != null) reference(program, address, target);
+    }
+  }
+
+  /** Code has no file-backed object address; its payload is a separate image. */
+  private static Address codeTarget(Snapshot snapshot, DartClusterParser.CodeEntry code) {
+    if (code.clusterIndex < 0) return null; // A deferred unit must supply its own image.
+    int slot = code.clusterIndex + snapshot.table().firstEntryWithCode;
+    long pc = snapshot.table().entries.get(slot).pcOffset();
+    return snapshot.instructions().add(pc + ((code.payloadInfo & 1) != 0 ? 24 : 0));
+  }
+
+  /** File-backed destinations only; serialized identities are not heap addresses.
+   * Function entries and Code payloads may share a destination. A class or arbitrary
+   * instance deliberately has none: its serialized fields are not an in-place object.
+   */
+  static Map<Integer, Address> fileTargets(Program program, Snapshot snapshot) throws IOException {
+    var targets = new LinkedHashMap<Integer, Address>();
+    var objects = snapshot.objects();
+    if (objects.vm != null && !objects.header.isLoadingUnit) {
+      Address vmData = symbol(program, "kDartVmSnapshotData");
+      if (vmData != null) for (var string : objects.vm.strings) {
+        if (!string.value.isEmpty()) targets.put(string.refId, vmData.add(string.dataOffset));
+      }
+    }
+    for (var string : objects.strings) {
+      if (!string.value.isEmpty()) targets.put(string.refId, snapshot.data().add(string.dataOffset));
+    }
+    var codes = new LinkedHashMap<Integer, Address>();
+    for (var code : objects.codes) {
+      Address target = codeTarget(snapshot, code);
+      if (target != null) {
+        codes.put(code.refId, target);
+        targets.put(code.refId, target);
+        if (objects.header.isLoadingUnit && code.refId <= objects.header.numBaseObjects) {
+          var owner = objects.named(code.ownerRef);
+          if (owner != null && owner.cid == objects.profile.cids.function) targets.put(owner.refId, target);
+        }
+      }
+    }
+    var indices = dispatchTargets(snapshot);
+    for (var named : objects.namedObjects) {
+      if (named.cid != objects.profile.cids.function) continue;
+      var serialized = objects.objects.get(named.refId);
+      if (serialized == null || serialized.scalars().length == 0) continue;
+      long index = serialized.scalars()[0];
+      Integer codeRef = objects.codeReference(index, snapshot.table().firstEntryWithCode);
+      Address target = codeRef == null ? null : codes.get(codeRef);
+      if (target == null && !objects.profile.codeTextOffsetDelta && index > 0) {
+        long localIndex = objects.header.isLoadingUnit ? index - objects.header.numBaseObjects : index;
+        if (localIndex > 0) target = indices.get(localIndex);
+      }
+      if (target != null) targets.put(named.refId, target);
+    }
+    return targets;
+  }
+
+  private static Map<Long, Address> dispatchTargets(Snapshot snapshot) throws IOException {
+    var objects = snapshot.objects();
+    var targets = new LinkedHashMap<Long, Address>();
+    boolean old = objects.profile.codeTextOffsetDelta;
+    if (!old) {
+      // Discarded Code entries retain their normal entry in InstructionsTable.
+      for (int slot = 0; slot < snapshot.table().firstEntryWithCode; slot++) {
+        targets.put((long) slot + 1,
+            snapshot.instructions().add(snapshot.table().entries.get(slot).pcOffset()));
+      }
+    }
+    Integer nullError = objects.roots.references().get("object_store.dispatch_table_null_error_stub");
+    for (var code : objects.codes) {
+      Address target = codeTarget(snapshot, code);
+      if (target == null) continue; // Deferred Code requires its unit's image.
+      long index = old ? (long) code.refId - objects.roots.firstCodeRef()
+          : (long) code.clusterIndex + snapshot.table().firstEntryWithCode + 1;
+      targets.put(index, target);
+      if (nullError != null && code.refId == nullError) targets.put(-1L, target);
+    }
+    // Only merged metadata provides an explicit LazyCompile Code reference.
+    if (!old) {
+      Integer lazy = objects.codeReference(0, snapshot.table().firstEntryWithCode);
+      if (lazy != null) for (var code : objects.codes) {
+        if (code.refId == lazy) {
+          Address target = codeTarget(snapshot, code);
+          if (target != null) targets.put(0L, target);
+          break;
+        }
+      }
+    }
+    return targets;
   }
 
   /** Materialize a named root or table slot without pretending it is a runtime address. */

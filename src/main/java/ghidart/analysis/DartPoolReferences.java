@@ -87,6 +87,8 @@ public final class DartPoolReferences {
               var target = slots.get(address.offset());
               RefType type = opcode == PcodeOp.LOAD ? RefType.READ : RefType.WRITE;
               program.getReferenceManager().addMemoryReference(instruction.getAddress(), target, type, SourceType.ANALYSIS, -1);
+              ghidart.importer.B4aImporter.annotatePoolSlot(program,
+                  instruction.getAddress(), target, address.offset());
               references++;
               var entry = entries.get(address.offset());
               if (opcode == PcodeOp.LOAD && entry.kind == DartClusterParser.PoolEntryKind.TAGGED) {
@@ -177,7 +179,7 @@ public final class DartPoolReferences {
       }
       var symbol = program.getSymbolTable().getPrimarySymbol(target);
       if (symbol != null && symbol.getParentNamespace().getName(true)
-          .equals("Dart::VM::BaseObjects")) return "_" + symbol.getName();
+          .equals("Library::VM::BaseObjects")) return "_" + symbol.getName();
     }
     return "";
   }

@@ -12,7 +12,6 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.program.model.symbol.SymbolUtilities;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.exception.DuplicateNameException;
 import ghidra.util.exception.InvalidInputException;
@@ -40,6 +39,7 @@ final class DartSnapshotSymbols {
   private final Map<Integer, DartClusterParser.ClassInfo> classes = new HashMap<>();
   private final TaskMonitor monitor;
   private Namespace root;
+  private Namespace metadata;
 
   private DartSnapshotSymbols(Program program, DartSnapshotAnalyzer.Snapshot snapshot,
       Address anchor, TaskMonitor monitor) {
@@ -66,7 +66,23 @@ final class DartSnapshotSymbols {
   private void publish(MessageLog log) throws InvalidInputException, DuplicateNameException,
       CircularDependencyException, IOException, CancelledException {
     monitor.setMessage("Organizing Dart library and class scopes");
-    root = namespace(program.getGlobalNamespace(), "Dart", false);
+    root = namespace(program.getGlobalNamespace(), "Library", false);
+    metadata = namespace(namespace(program.getGlobalNamespace(), "Dart Objects", false), snapshot.scope(), false);
+    // Remove only our old detail labels from the library tree. Object identities
+    // and their graph references remain intact; user labels are never moved.
+    var oldLabels = program.getSymbolTable().getSymbolIterator(anchor, true);
+    var block = program.getMemory().getBlock(anchor);
+    var obsolete = new java.util.ArrayList<ghidra.program.model.symbol.Symbol>();
+    while (oldLabels.hasNext()) {
+      monitor.checkCancelled();
+      var symbol = oldLabels.next();
+      if (!block.contains(symbol.getAddress())) break;
+      String name = symbol.getName();
+      if (symbol.getSource() == SourceType.ANALYSIS && (name.equals("class_info")
+          || name.equals("library_info") || name.startsWith("code_info_")
+          || name.startsWith("function_info_"))) obsolete.add(symbol);
+    }
+    obsolete.forEach(ghidra.program.model.symbol.Symbol::delete);
     // Base identities keep the same indices through VM, program and loading-unit
     // reference tables. Give them names without assigning a runtime heap address.
     var baseScope = objects;
@@ -83,16 +99,20 @@ final class DartSnapshotSymbols {
     int classes = 0;
     for (var cls : objects.classes) {
       monitor.checkCancelled();
-      label(identity(cls.refId), "class_info", owner(cls.refId, new HashSet<>()));
+      Namespace clazz = owner(cls.refId, new HashSet<>());
+      label(identity(cls.refId), clazz.getName() + "_ref" + cls.refId,
+          namespace(metadata, "Classes", false));
       classes++;
     }
     for (var named : objects.namedObjects) {
       monitor.checkCancelled();
       if (named.cid == objects.profile.cids.library) {
-        label(identity(named.refId), "library_info", owner(named.refId, new HashSet<>()));
+        Namespace library = owner(named.refId, new HashSet<>());
+        label(identity(named.refId), library.getName() + "_ref" + named.refId,
+            namespace(metadata, "Libraries", false));
       } else if (named.cid == objects.profile.cids.field) {
         label(identity(named.refId), string(named.nameRefId, "field_" + named.refId),
-            owner(named.ownerRefId, new HashSet<>()));
+            namespace(metadata, "Fields", false));
       }
     }
     monitor.setMessage("Organizing Dart functions and aliases");
@@ -111,7 +131,8 @@ final class DartSnapshotSymbols {
       SourceType source = function.getSymbol().getSource();
       if (source == SourceType.USER_DEFINED || source == SourceType.IMPORTED) continue;
       var currentParent = function.getParentNamespace();
-      if (!currentParent.isGlobal() && !currentParent.getName(true).startsWith("Dart::")) continue;
+      if (!currentParent.isGlobal() && !currentParent.getName(true).startsWith("Dart::")
+          && !currentParent.getName(true).startsWith("Library::")) continue;
       String pretty = objects.functionNameByCodeSlot.get(code.clusterIndex);
       String generated = "dart_" + Long.toUnsignedString(function.getEntryPoint().subtract(program.getImageBase()), 16);
       Namespace parent;
@@ -225,7 +246,8 @@ final class DartSnapshotSymbols {
       long pc = snapshot.table().entries.get(slot).pcOffset() + ((code.payloadInfo & 1) != 0 ? 24 : 0);
       var function = program.getFunctionManager().getFunctionAt(snapshot.instructions().add(pc));
       if (function == null) continue;
-      label(identity(code.refId), "code_info_" + function.getName(), function.getParentNamespace());
+      label(identity(code.refId), function.getName() + "_ref" + code.refId,
+          namespace(metadata, "Code", false));
       var declaration = objects.named(code.ownerRef);
       if (declaration != null && declaration.cid == objects.profile.cids.clazz) {
         comment(function.getEntryPoint(), "Dart class allocation stub; this is not a class method. "
@@ -235,8 +257,8 @@ final class DartSnapshotSymbols {
     for (var named : objects.namedObjects) {
       monitor.checkCancelled();
       if (named.cid == objects.profile.cids.function) {
-        label(identity(named.refId), "function_info_" + string(named.nameRefId, "ref_" + named.refId),
-            owner(named.ownerRefId, new HashSet<>()));
+        label(identity(named.refId), string(named.nameRefId, "function") + "_ref" + named.refId,
+            namespace(metadata, "Functions", false));
         var serialized = objects.object(named.refId);
         if (!objects.profile.codeTextOffsetDelta && serialized != null
             && serialized.scalars().length > 0 && serialized.scalars()[0] == 0) {
@@ -292,7 +314,7 @@ final class DartSnapshotSymbols {
     }
     log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + classes + " class records organized, "
         + functions + " scoped functions. "
-        + "Browse Symbol Tree > Namespaces/Classes > Dart and Dart::ObjectPools.");
+        + "Browse Library for declarations; Dart Objects for serialized identities; Library::ObjectPools for slots.");
   }
 
   private void collectStrings(DartClusterParser.Result result, Address data)
@@ -326,7 +348,7 @@ final class DartSnapshotSymbols {
   }
 
   private Namespace owner(int ref, Set<Integer> active)
-      throws InvalidInputException, DuplicateNameException {
+      throws InvalidInputException, DuplicateNameException, CircularDependencyException {
     if (owners.containsKey(ref)) return owners.get(ref);
     if (ref <= 0 || active.size() >= 32 || !active.add(ref)) return namespace(root, "Unresolved", false);
     var named = objects.named(ref);
@@ -343,16 +365,18 @@ final class DartSnapshotSymbols {
       var object = objects.object(ref);
       int[] refs = object == null ? new int[0] : object.references();
       String url = refs.length > 1 ? string(refs[1], null) : null;
-      parent = root;
       if (url == null || url.isEmpty()) url = "library_" + ref;
-      for (String part : url.split("[/:]+")) if (!part.isEmpty()) parent = namespace(parent, part, false);
+      parent = ghidart.listing.DartNamespaces.library(program, url, SourceType.ANALYSIS);
     } else {
       var cls = classes.get(ref);
       parent = owner(cls == null ? named.ownerRefId : cls.libraryRefId, active);
       String name = string(named.nameRefId, "declaration_" + ref);
-      if (!name.equals("::")) parent = namespace(parent,
-          named.cid == objects.profile.cids.function ? name + "$closures" : name,
-          named.cid == objects.profile.cids.clazz);
+      if (!name.equals("::")) {
+        parent = named.cid == objects.profile.cids.clazz && cls != null
+            ? ghidart.listing.DartNamespaces.clazz(program, cls.classId, parent, name, SourceType.ANALYSIS)
+            : namespace(parent, named.cid == objects.profile.cids.function ? name + "$closures" : name,
+                named.cid == objects.profile.cids.clazz);
+      }
     }
     active.remove(ref);
     owners.put(ref, parent);
@@ -361,12 +385,7 @@ final class DartSnapshotSymbols {
 
   private Namespace namespace(Namespace parent, String name, boolean clazz)
       throws InvalidInputException, DuplicateNameException {
-    name = clean(name);
-    var table = program.getSymbolTable();
-    var existing = table.getNamespace(name, parent);
-    if (existing != null) return existing;
-    return clazz ? table.createClass(parent, name, SourceType.ANALYSIS)
-        : table.createNameSpace(parent, name, SourceType.ANALYSIS);
+    return ghidart.listing.DartNamespaces.namespace(program, parent, name, clazz, SourceType.ANALYSIS);
   }
 
   private void label(Address address, String name, Namespace parent) throws InvalidInputException {
@@ -383,7 +402,7 @@ final class DartSnapshotSymbols {
   }
 
   private static String clean(String value) {
-    return SymbolUtilities.replaceInvalidChars(value == null || value.isEmpty() ? "unnamed" : value, true);
+    return ghidart.listing.DartNamespaces.clean(value);
   }
 
   private static String preview(String value) {

@@ -26,9 +26,26 @@ import java.util.LinkedHashSet;
 public final class DartViewsPlugin extends ProgramPlugin {
   public DartViewsPlugin(PluginTool tool) {
     super(tool);
-    action("Show b4a Records", this::showRecords);
+    action("Show Dart Records", this::showRecords);
     action("Show Value Uses", this::showUses);
     action("Show Characters", this::showCharacters);
+  }
+
+  @Override
+  protected void programActivated(ghidra.program.model.listing.Program program) {
+    if (!"AARCH64:LE:64:dart".equals(program.getLanguageID().toString())) return;
+    var viewer = tool.getService(ghidra.app.services.CodeViewerService.class);
+    if (viewer == null) return;
+    var model = viewer.getFormatManager().getCodeUnitFormat();
+    for (int row = 0; row < model.getNumRows(); row++) {
+      for (var field : model.getFactorys(row)) {
+        if (field instanceof B4aAnnotationFieldFactory) return;
+      }
+    }
+    int row = model.getNumRows();
+    model.addRow(row);
+    model.addFactory(new B4aAnnotationFieldFactory(), row, 0);
+    model.getFactorys(row)[0].setWidth(900);
   }
 
   private void action(String name, Runnable show) {
@@ -70,18 +87,23 @@ public final class DartViewsPlugin extends ProgramPlugin {
   }
 
   private void showRecords() {
-    var facts = currentProgram.getUsrPropertyManager().getStringPropertyMap(B4aImporter.FACTS);
     boolean found = false;
-    if (facts != null) {
-      var json = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
-      for (Address address : locations()) {
+    var notes = currentProgram.getUsrPropertyManager().getStringPropertyMap(B4aImporter.ANNOTATIONS);
+    String note = notes == null ? null : notes.getString(currentLocation.getAddress());
+    if (note != null) { print(note); found = true; }
+    var json = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
+    var addresses = locations();
+    for (String source : new String[] {"ghidart.L2.objects.v1", B4aImporter.FACTS}) {
+      var facts = currentProgram.getUsrPropertyManager().getStringPropertyMap(source);
+      if (facts == null) continue;
+      for (Address address : addresses) {
         String record = facts.getString(address);
         if (record == null) continue;
-        print(address + "\n" + json.toJson(JsonParser.parseString(record)));
+        print(address + " [" + source + "]\n" + json.toJson(JsonParser.parseString(record)));
         found = true;
       }
     }
-    if (!found) print("No b4a record here. Run Dart b4a Import, or select a B4a metadata record/reference.");
+    if (!found) print("No Dart record here. Select code, an object or a pool slot after L2/L3 analysis.");
   }
 
   private void showUses() {

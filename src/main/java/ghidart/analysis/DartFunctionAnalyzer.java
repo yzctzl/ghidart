@@ -88,6 +88,7 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
   public boolean added(Program program, AddressSetView selection, TaskMonitor monitor,
       MessageLog log) throws CancelledException {
     try (var output = new DartAnalysisLog(program, log)) {
+      if (ghidart.importer.B4aImporter.isImported(program)) return true;
       return analyze(program, selection, monitor, output.messages());
     }
   }

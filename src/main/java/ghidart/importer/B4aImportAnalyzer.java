@@ -1,4 +1,4 @@
-/** Import the shared b4a document as an optional semantic layer over L1/L2. */
+/** Prefer matching b4a data, enriched by L2 objects and independent L1 ABI analysis. */
 package ghidart.importer;
 
 import ghidart.analysis.DartAnalysisLog;
@@ -18,9 +18,9 @@ public final class B4aImportAnalyzer extends AbstractAnalyzer {
   private final DartAotAnalyzer source = new DartAotAnalyzer();
 
   public B4aImportAnalyzer() {
-    super("Dart b4a Import", "Import b4a names, layouts, pool/Thread observations and analysis comments.",
+    super("Dart b4a Import", "Import b4a names, layouts, pool/Thread observations and Listing-only annotations.",
         AnalyzerType.BYTE_ANALYZER);
-    setPriority(AnalysisPriority.DISASSEMBLY.after());
+    setPriority(AnalysisPriority.DISASSEMBLY.before().before().before());
     setSupportsOneTimeAnalysis();
     setDefaultEnablement(false);
   }

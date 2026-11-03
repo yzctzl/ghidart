@@ -678,7 +678,24 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         renameable.add(entry);
       }
     }
-    var stats = DartAotAnalyzer.applyBoundaries(program, snapshot.units(), monitor, log);
+    // Keep L3-owned bodies intact. L2 may add disjoint payloads absent from the
+    // export (notably VM helpers), never another owner for an existing range.
+    // A null primary preserves that owner while still contributing L2 alternate
+    // entry labels and bounded disassembly, hence their real string/pool references.
+    var units = snapshot.units();
+    if (ghidart.importer.B4aImporter.isImported(program)) {
+      var merged = new java.util.ArrayList<DartCodeIndex.CodeUnit>();
+      for (var unit : units) {
+        monitor.checkCancelled();
+        var body = new AddressSet(program.getImageBase().add(unit.start()),
+            program.getImageBase().add(unit.end() - 1));
+        merged.add(program.getFunctionManager().getFunctionsOverlapping(body).hasNext()
+            ? new DartCodeIndex.CodeUnit(unit.start(), unit.end(), null, unit.entries()) : unit);
+      }
+      units = merged;
+    }
+    var stats = units.isEmpty() ? new DartAotAnalyzer.DiscoveryStats()
+        : DartAotAnalyzer.applyBoundaries(program, units, monitor, log);
     int named = 0;
     for (int rangeIndex = 0; rangeIndex < snapshot.table().uniqueRanges.size(); rangeIndex++) {
       var range = snapshot.table().uniqueRanges.get(rangeIndex);
@@ -713,14 +730,18 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       throws IOException, CancelledException {
     String option = OWNER + "." + snapshot.scope() + ".presentation";
     Address anchor = program.getMemory().getBlock("DartObjects_" + snapshot.scope()).getStart();
+    for (var cls : snapshot.objects().classes) {
+      monitor.checkCancelled();
+      ghidart.importer.B4aImporter.annotateClass(program, anchor.add(cls.refId * 8L), cls.classId);
+    }
     String semantics = OWNER + "." + snapshot.scope() + ".semanticFacts";
     if (program.getOptions(OWNER).getInt(semantics, 0) != 1) {
       publishSemanticFacts(program, snapshot, anchor, monitor);
       program.getOptions(OWNER).setInt(semantics, 1);
     }
-    if (program.getOptions(OWNER).getInt(option, 0) != 7) {
+    if (program.getOptions(OWNER).getInt(option, 0) != 8) {
       DartSnapshotSymbols.publish(program, snapshot, anchor, monitor, log);
-      program.getOptions(OWNER).setInt(option, 7);
+      program.getOptions(OWNER).setInt(option, 8);
     }
     String typeOption = OWNER + "." + snapshot.scope() + ".classTypes";
     if (program.getOptions(OWNER).getInt(typeOption, 0) != 4) {
@@ -733,10 +754,10 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       program.getOptions(OWNER).setInt(codeOption, 1);
     }
     String poolOption = OWNER + "." + snapshot.scope() + ".poolReferences";
-    if (program.getOptions(OWNER).getInt(poolOption, 0) != 2) {
+    if (program.getOptions(OWNER).getInt(poolOption, 0) != 3) {
       int links = DartPoolReferences.publish(program, snapshot, anchor, monitor);
       log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + links + " PP slot references.");
-      program.getOptions(OWNER).setInt(poolOption, 2);
+      program.getOptions(OWNER).setInt(poolOption, 3);
     }
   }
 

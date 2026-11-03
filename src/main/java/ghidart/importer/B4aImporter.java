@@ -3,7 +3,7 @@
  *
  * Read one declaration at a time: real documents can exceed 250 MB. Validate the
  * original image before mutation, and publish in one rollbackable transaction.
- * OTHER records are database identities, never invented runtime heap pointers.
+ * Private facts stay in properties. Descriptions annotate proved slots, never fake objects.
  * Logical signatures and printed IL remain evidence, not physical call contracts.
  */
 package ghidart.importer;
@@ -26,7 +26,6 @@ import ghidra.program.model.scalar.Scalar;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.SourceType;
-import ghidra.program.model.symbol.SymbolUtilities;
 import ghidra.program.model.util.StringPropertyMap;
 import ghidra.util.task.TaskMonitor;
 import java.io.InputStream;
@@ -42,16 +41,22 @@ import java.util.Set;
 
 public final class B4aImporter {
   public static final String FACTS = "ghidart.b4a";
+  public static final String ANNOTATIONS = "ghidart.b4a.listing";
+  private static final int PRESENTATION = 3;
   private static final String GENERATION = "b4aGeneration";
   private final Program program;
   private final TaskMonitor monitor;
   private final Map<Integer, JsonObject> classes = new LinkedHashMap<>();
   private final Map<Integer, Namespace> owners = new HashMap<>();
-  private final Map<String, Address> slots = new HashMap<>();
+  private final Map<String, JsonArray> slots = new HashMap<>();
   private final java.util.TreeMap<Long, DartCodeIndex.CodeUnit> ranges = new java.util.TreeMap<>();
   private final Map<String, JsonArray> structures = new LinkedHashMap<>();
   private StringPropertyMap facts;
   private Address next;
+  private StringPropertyMap annotations;
+  private final Map<Long, String> fallbackNames = new LinkedHashMap<>();
+  private final Set<Address> named = new HashSet<>();
+  private final java.util.List<Namespace> obsoleteNamespaces = new java.util.ArrayList<>();
   private Namespace root;
   private int slotSize;
   private long records;
@@ -77,11 +82,11 @@ public final class B4aImporter {
     DartAotAnalyzer.verifyIdentity(program, index);
     var options = program.getOptions("ghidart");
     String previous = options.getString(GENERATION, "");
-    if (identity.equals(previous)) {
+    if (identity.equals(previous) && options.getInt("b4aPresentation", 0) == PRESENTATION) {
       log.appendMsg("Dart b4a Import", "This b4a generation is already imported; user edits preserved.");
       return;
     }
-    if (!previous.isEmpty()) {
+    if (!previous.isEmpty() && !identity.equals(previous)) {
       throw new IllegalArgumentException("different b4a generation; existing data preserved, use a fresh database");
     }
     var importer = new B4aImporter(program, index, monitor);
@@ -94,16 +99,22 @@ public final class B4aImporter {
     int transaction = program.startTransaction("Import b4a semantics");
     boolean committed = false;
     try {
+      if (!previous.isEmpty()) importer.removeOldPresentation();
       DartAotAnalyzer.applyBoundaries(program, index.codeUnits(), monitor, log);
       monitor.setIndeterminate(false);
       monitor.initialize(importer.records, "Publishing b4a facts");
       importer.initialize();
+      monitor.setMessage("Publishing b4a classes and layouts");
       importer.publishClasses();
       for (var structure : importer.structures.entrySet()) {
+        monitor.setMessage("Publishing b4a " + structure.getKey());
         importer.publishStructure(structure.getKey(), structure.getValue());
       }
       importer.scan(path, true);
       if (!identity.equals(hash(path, monitor))) throw new IllegalArgumentException("b4a file changed during import");
+      importer.publishFallbackNames();
+      importer.pruneOldNamespaces();
+      options.setInt("b4aPresentation", PRESENTATION);
       options.setString(GENERATION, identity);
       options.setString("b4aPath", path.toAbsolutePath().normalize().toString());
       committed = true;
@@ -112,7 +123,7 @@ public final class B4aImporter {
     }
     log.appendMsg("Dart b4a Import", "Imported " + importer.classes.size() + " classes, "
         + importer.declarations + " declarations, " + importer.names + " names, "
-        + importer.comments + " comments and " + importer.references + " operand references; "
+        + importer.comments + " Listing annotations and " + importer.references + " existing L2 slot matches; "
         + importer.unresolvedOperands + " operands retained without a proved slot. Physical ABI unchanged.");
   }
 
@@ -146,8 +157,10 @@ public final class B4aImporter {
               monitor.checkCancelled();
               JsonElement value = JsonParser.parseReader(reader);
               if (!value.isJsonNull()) {
-                if (publish) publishRecord(section, value);
-                else validateRecord(section, value);
+                if (publish) {
+                  publishRecord(section, value);
+                  monitor.increment();
+                } else validateRecord(section, value);
               }
               if (++count % 256 == 0) monitor.setMessage("b4a " + section + ": " + count + " records");
             }
@@ -189,8 +202,8 @@ public final class B4aImporter {
             }
             if (!publish) records++;
             if (publish) {
-              Address record = record(value);
-              label(record, section, root);
+              record(value); // Export metadata is retained privately, not fake Listing data.
+              monitor.increment();
             }
           }
         }
@@ -216,6 +229,7 @@ public final class B4aImporter {
     } else {
       JsonArray row = value.getAsJsonArray();
       long rva = rva(row.get(0));
+      if (section.equals("functions")) fallbackNames.putIfAbsent(rva, row.get(2).getAsString());
       if (section.equals("analysis")) {
         if (row.size() != 2) throw new IllegalArgumentException("invalid analysis record");
         JsonObject body = row.get(1).getAsJsonObject();
@@ -251,42 +265,147 @@ public final class B4aImporter {
     return result;
   }
 
-  private void initialize() throws Exception {
-    long size = Math.multiplyExact(records + 1024, 8);
-    if (size > (1L << 30)) throw new IllegalArgumentException("b4a metadata too large");
-    next = program.getAddressFactory().getAddressSpace("OTHER").getAddress(0x40_0000_0000L);
-    var block = program.getMemory().createInitializedBlock("B4aMetadata", next, size, (byte) 0, monitor, false);
-    block.setRead(true);
-    block.setWrite(false);
-    block.setExecute(false);
-    block.setArtificial(true);
-    block.setComment("b4a exported facts; logical identities, NOT runtime heap addresses");
-    facts = program.getUsrPropertyManager().createStringPropertyMap(FACTS);
-    root = namespace(program.getGlobalNamespace(), "B4a", false);
+  /** Upgrade only our prior presentation; user symbols, comments and references survive. */
+  private void removeOldPresentation() throws Exception {
+    var oldRoot = program.getSymbolTable().getNamespace("B4a", program.getGlobalNamespace());
+    if (oldRoot != null) {
+      obsoleteNamespaces.add(oldRoot);
+      rememberNamespaces(oldRoot);
+    }
+    var old = program.getMemory().getBlock("B4aMetadata");
+    if (old != null) {
+      var map = program.getUsrPropertyManager().getStringPropertyMap(FACTS);
+      var locations = map.getPropertyIterator();
+      while (locations.hasNext()) {
+        monitor.checkCancelled();
+        Address address = locations.next();
+        var data = program.getListing().getDataAt(address);
+        if (data != null && !Undefined.isUndefined(data.getDataType())) {
+          throw new IllegalArgumentException("user data types in old metadata; use a fresh database");
+        }
+        for (var kind : CommentType.values()) {
+          String comment = program.getListing().getComment(kind, address);
+          if (comment != null && comment.lines().anyMatch(line -> !line.startsWith("[b4a] "))) {
+            throw new IllegalArgumentException("user comments in old metadata; use a fresh database");
+          }
+        }
+        for (var reference : program.getReferenceManager().getReferencesTo(address)) {
+          if (reference.getSource() == SourceType.USER_DEFINED) {
+            throw new IllegalArgumentException("user references point to old metadata; use a fresh database");
+          }
+          if (reference.getSource() == SourceType.IMPORTED) program.getReferenceManager().delete(reference);
+        }
+        for (var reference : program.getReferenceManager().getReferencesFrom(address)) {
+          if (reference.getSource() == SourceType.IMPORTED) program.getReferenceManager().delete(reference);
+        }
+        for (var symbol : program.getSymbolTable().getSymbols(address)) {
+          if (symbol.getSource() == SourceType.USER_DEFINED) {
+            throw new IllegalArgumentException("user symbols in old metadata; use a fresh database");
+          }
+          if (symbol.getSource() == SourceType.IMPORTED) symbol.delete();
+        }
+      }
+      program.getMemory().removeBlock(old, monitor);
+    }
+    var listing = program.getListing();
+    for (var kind : new CommentType[] {CommentType.PLATE, CommentType.EOL}) {
+      var iterator = listing.getCommentAddressIterator(kind, program.getMemory(), true);
+      while (iterator.hasNext()) {
+        monitor.checkCancelled();
+        Address address = iterator.next();
+        String comment = listing.getComment(kind, address);
+        if (comment == null || !comment.contains("[b4a] ")) continue;
+        String kept = comment.lines().filter(line -> !line.startsWith("[b4a] "))
+            .collect(java.util.stream.Collectors.joining("\n"));
+        listing.setComment(address, kind, kept.isEmpty() ? null : kept);
+      }
+    }
+    var entries = program.getSymbolTable().getNamespace("B4a", program.getGlobalNamespace());
+    if (entries != null) {
+      entries = program.getSymbolTable().getNamespace("Entries", entries);
+      if (entries != null) {
+        var iterator = program.getSymbolTable().getSymbols(entries);
+        while (iterator.hasNext()) {
+          var symbol = iterator.next();
+          if (symbol.getSource() == SourceType.IMPORTED && !symbol.getSymbolType().equals(
+              ghidra.program.model.symbol.SymbolType.FUNCTION)) symbol.delete();
+        }
+        if (!program.getSymbolTable().getSymbols(entries).hasNext()) entries.getSymbol().delete();
+      }
+    }
+    var descriptions = program.getMemory().getBlock("B4aValues");
+    if (descriptions != null) {
+      // This overlay held exported text, never target bytes. Refuse to discard
+      // user work; ordinary imports remove only the presentation we created.
+      var oldFacts = program.getUsrPropertyManager().getStringPropertyMap(FACTS);
+      var data = listing.getDefinedData(new ghidra.program.model.address.AddressSet(
+          descriptions.getStart(), descriptions.getEnd()), true);
+      while (data.hasNext()) {
+        monitor.checkCancelled();
+        var value = data.next();
+        String json = oldFacts == null ? null : oldFacts.getString(value.getAddress());
+        if (json == null || !value.hasStringValue()
+            || !slotText(JsonParser.parseString(json).getAsJsonArray()).equals(value.getValue())) {
+          throw new IllegalArgumentException("modified B4aValues data; use a fresh database");
+        }
+        for (var kind : CommentType.values()) {
+          if (listing.getComment(kind, value.getAddress()) != null) {
+            throw new IllegalArgumentException("user comments in B4aValues; use a fresh database");
+          }
+        }
+        for (var reference : program.getReferenceManager().getReferencesFrom(value.getAddress())) {
+          if (reference.getSource() == SourceType.USER_DEFINED) throw new IllegalArgumentException("user references in B4aValues; use a fresh database");
+        }
+      }
+      for (var it = program.getSymbolTable().getSymbolIterator(descriptions.getStart(), true); it.hasNext();) {
+        var symbol = it.next();
+        if (!descriptions.contains(symbol.getAddress())) break;
+        if (symbol.getSource() == SourceType.USER_DEFINED) throw new IllegalArgumentException("user symbols in B4aValues; use a fresh database");
+      }
+      for (var it = program.getReferenceManager().getReferenceDestinationIterator(
+          new ghidra.program.model.address.AddressSet(descriptions.getStart(), descriptions.getEnd()), true); it.hasNext();) {
+        for (var reference : program.getReferenceManager().getReferencesTo(it.next())) {
+          if (reference.getSource() == SourceType.USER_DEFINED) throw new IllegalArgumentException("user references to B4aValues; use a fresh database");
+          if (reference.getSource() == SourceType.IMPORTED) program.getReferenceManager().delete(reference);
+        }
+      }
+      program.getMemory().removeBlock(descriptions, monitor);
+    }
+    program.getUsrPropertyManager().removePropertyMap(FACTS);
+    program.getUsrPropertyManager().removePropertyMap(ANNOTATIONS);
   }
 
-  private Address record(JsonElement value) throws Exception {
+  private void initialize() throws Exception {
+    // Private records need keys, not mapped zero-filled bytes or symbol-tree labels.
+    next = program.getAddressFactory().getAddressSpace("OTHER").getAddress(0x40_0000_0000L);
+    facts = program.getUsrPropertyManager().createStringPropertyMap(FACTS);
+    annotations = program.getUsrPropertyManager().createStringPropertyMap(ANNOTATIONS);
+    root = namespace(program.getGlobalNamespace(), "Library", false);
+  }
+
+  private void record(JsonElement value) throws Exception {
     monitor.checkCancelled();
     Address address = next;
     next = next.add(8);
-    monitor.increment();
-    program.getListing().createData(address, Undefined.getUndefinedDataType(8));
     facts.add(address, value.toString());
-    return address;
+  }
+
+  private static boolean hasContent(JsonArray row) {
+    String name = row.get(1).getAsString();
+    return !row.get(2).getAsString().isBlank() || (!name.isBlank() && !name.startsWith("pad_"));
+  }
+
+  private static String slotText(JsonArray row) {
+    String description = row.get(2).getAsString();
+    return description.isBlank() ? row.get(1).getAsString() : description;
   }
 
   private Namespace namespace(Namespace parent, String name, boolean clazz) throws Exception {
-    String clean = clean(name);
-    var symbols = program.getSymbolTable();
-    Namespace existing = symbols.getNamespace(clean, parent);
-    if (existing != null) return existing;
-    return clazz ? symbols.createClass(parent, clean, SourceType.IMPORTED)
-        : symbols.createNameSpace(parent, clean, SourceType.IMPORTED);
+    return ghidart.listing.DartNamespaces.namespace(program, parent, name, clazz, SourceType.IMPORTED);
   }
 
   private static String clean(String name) {
-    String result = SymbolUtilities.replaceInvalidChars(name.isBlank() ? "unnamed" : name, true);
-    return result.length() <= 180 ? result : result.substring(0, 160) + "_" + Integer.toUnsignedString(name.hashCode(), 16);
+    return ghidart.listing.DartNamespaces.clean(name);
   }
 
   private void label(Address address, String name, Namespace owner) throws Exception {
@@ -296,19 +415,46 @@ public final class B4aImporter {
   }
 
   private void publishClasses() throws Exception {
-    Namespace libraries = namespace(root, "Libraries", false);
     for (var cls : classes.values()) {
       monitor.checkCancelled();
       int id = cls.get("id").getAsInt();
-      Namespace library = namespace(libraries, text(cls, "library", "SDK"), false);
+      Namespace library = ghidart.listing.DartNamespaces.library(program, text(cls, "library", "SDK"), SourceType.IMPORTED);
       String name = text(cls, "name", "class_" + id);
-      Namespace owner = name.isEmpty() ? library : namespace(library, name + "_cid" + id, true);
+      Namespace owner = (name.isEmpty() || name.equals("::")) ? library
+          : ghidart.listing.DartNamespaces.clazz(program, id, library, name, SourceType.IMPORTED);
       owners.put(id, owner);
-      Address address = record(cls);
-      label(address, "class_info_" + id, owner);
-      mergeComment(address, CommentType.PLATE, cls.toString());
+      facts.add(classKey(program, id), cls.toString());
     }
     for (var cls : classes.values()) publishLayout(cls);
+    // Manual L3 import may follow an already-published L2 object graph.
+    var objects = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
+    if (objects != null) {
+      var identities = objects.getPropertyIterator();
+      while (identities.hasNext()) {
+        monitor.checkCancelled();
+        Address address = identities.next();
+        var object = JsonParser.parseString(objects.getString(address)).getAsJsonObject();
+        if (object.has("kind") && object.get("kind").getAsString().equals("Class") && object.has("object")) {
+          annotateClass(program, address, object.getAsJsonObject("object").get("classId").getAsInt());
+        }
+      }
+    }
+  }
+
+  private static Address classKey(Program program, int cid) {
+    return program.getAddressFactory().getAddressSpace("OTHER").getAddress(0x50_0000_0000L + cid);
+  }
+
+  /** Match Class identities by validated target CID, not by a pretty name or heap address. */
+  public static void annotateClass(Program program, Address identity, int cid) {
+    var facts = program.getUsrPropertyManager().getStringPropertyMap(FACTS);
+    if (facts == null) return;
+    String cls = facts.getString(classKey(program, cid));
+    if (cls == null) return;
+    String previous = facts.getString(identity);
+    var record = previous == null ? new JsonObject() : JsonParser.parseString(previous).getAsJsonObject();
+    record.add("class", JsonParser.parseString(cls));
+    facts.add(identity, record.toString());
   }
 
   private void publishLayout(JsonObject cls) throws Exception {
@@ -342,21 +488,12 @@ public final class B4aImporter {
 
   private void publishRecord(String section, JsonElement value) throws Exception {
     if (section.equals("classes") || section.equals("topClasses")) return;
-    if (section.equals("codeUnits")) {
-      Address retained = record(value);
-      var unit = value.getAsJsonObject();
-      label(retained, "code_" + unit.get("start").getAsString(), namespace(root, "CodeUnits", false));
-      return;
-    }
+    if (section.equals("codeUnits")) return; // Already represented by real functions/ranges.
     JsonArray row = value.getAsJsonArray();
     long offset = rva(row.get(0));
     Address address = program.getImageBase().add(offset);
     if (section.equals("functions")) {
-      Address retained = record(value);
-      if (codeContains(offset)) {
-        label(address, row.get(2).getAsString(), namespace(root, "Entries", false));
-        program.getReferenceManager().addMemoryReference(retained, address, RefType.DATA, SourceType.IMPORTED, 0);
-      }
+      return; // Legacy names are fallback names, never a second parallel tree.
     } else if (section.equals("analysis")) {
       publishDeclaration(offset, row);
     } else {
@@ -371,31 +508,27 @@ public final class B4aImporter {
 
   private void publishDeclaration(long offset, JsonArray row) throws Exception {
     JsonObject body = row.get(1).getAsJsonObject();
-    Address retained = record(row);
     declarations++;
     Namespace owner = owners.getOrDefault(body.get("cid").getAsInt(), root);
     String name = body.get("name").getAsString();
     int separator = name.indexOf("::");
     if (separator >= 0) name = name.substring(separator + 2);
     name = clean(name) + "_" + Long.toHexString(offset);
-    label(retained, "declaration_" + declarations + "_" + name, owner);
-    JsonObject summary = body.deepCopy();
-    summary.remove("il");
-    summary.remove("annotations");
-    mergeComment(retained, CommentType.PLATE, summary.toString());
-    if (!codeContains(offset)) return;
+
+    if (!codeContains(offset)) { record(row); return; }
     Address entry = program.getImageBase().add(offset);
-    program.getReferenceManager().addMemoryReference(retained, entry, RefType.DATA, SourceType.IMPORTED, 0);
-    program.getReferenceManager().addMemoryReference(entry, retained, RefType.DATA, SourceType.IMPORTED, -1);
+    appendFact(entry, "declarations", row);
     var function = program.getFunctionManager().getFunctionAt(entry);
     if (function != null && function.getSymbol().getSource() != SourceType.USER_DEFINED
-        && function.getSymbol().getSource() != SourceType.IMPORTED) {
-      function.setParentNamespace(owner);
-      function.setName(name, SourceType.IMPORTED);
+        && (function.getSymbol().getSource() != SourceType.IMPORTED || isOurs(function.getParentNamespace()))
+        && named.add(entry)) {
+      // Move and rename atomically: L2 may already have a shared-code alias
+      // using the old method name in this class at the same address.
+      function.getSymbol().setNameAndNamespace(name, owner, SourceType.IMPORTED);
       names++;
     }
     label(entry, name, owner);
-    mergeComment(entry, CommentType.PLATE, summary.toString());
+
     for (String key : new String[] {"il", "annotations"}) {
       if (!body.has(key)) continue;
       for (var item : body.getAsJsonArray(key)) {
@@ -407,26 +540,24 @@ public final class B4aImporter {
         String message = key.equals("il")
             ? "IL [" + annotation.get(0).getAsString() + ", " + annotation.get(1).getAsString() + "): " + annotation.get(3).getAsString()
             : annotation.get(1).getAsString();
-        mergeComment(program.getImageBase().add(site), CommentType.EOL, message);
+        saveAnnotation(program.getImageBase().add(site), message);
       }
     }
   }
 
   private void publishStructure(String name, JsonArray members) throws Exception {
-    Namespace owner = namespace(namespace(root, "Structures", false), name, false);
+    if (members.asList().stream().noneMatch(value -> hasContent(value.getAsJsonArray()))) return;
     var type = new StructureDataType(new CategoryPath("/Dart/B4a/Structures"), clean(name), 0);
     var sorted = new java.util.ArrayList<JsonElement>(members.asList());
     sorted.sort(java.util.Comparator.comparingInt(value -> value.getAsJsonArray().get(0).getAsInt()));
     for (var value : sorted) {
       monitor.checkCancelled();
       JsonArray member = value.getAsJsonArray();
+      monitor.increment();
       int offset = member.get(0).getAsInt();
       String label = member.get(1).getAsString();
-      Address slot = record(value);
-      slots.put(name + ":" + offset, slot);
-      label(slot, label + "_" + Integer.toHexString(offset), owner);
-      mergeComment(slot, CommentType.EOL, name + " + 0x" + Integer.toHexString(offset)
-          + "; " + member.get(2).getAsString());
+      if (!hasContent(member)) continue;
+      slots.put(name + ":" + offset, member);
       // These are machine-word structures, never compressed object-slot arrays.
       // Unpacked append is linear. growStructure/replaceAtOffset repack all
       // previous members and become quadratic on a real 90,000-slot pool.
@@ -444,7 +575,7 @@ public final class B4aImporter {
   }
 
   private void publishOperand(Address address, JsonArray row) throws Exception {
-    Address retained = record(row);
+    appendFact(address, "operands", row);
     int operand = row.get(1).getAsInt();
     String structure = row.get(2).getAsString();
     long delta = row.get(3).getAsLong();
@@ -453,39 +584,133 @@ public final class B4aImporter {
       unresolvedOperands++;
       return;
     }
-    program.getReferenceManager().addMemoryReference(retained, address, RefType.DATA, SourceType.IMPORTED, 0);
     Scalar scalar = null;
     int count = 0;
     for (Object object : instruction.getOpObjects(operand)) {
       if (object instanceof Scalar value) { scalar = value; count++; }
     }
-    Address slot = count == 1 ? slots.get(structure + ":" + (scalar.getSignedValue() + delta)) : null;
-    if (slot == null) {
+    long offset = count == 1 ? scalar.getSignedValue() + delta : -1;
+    JsonArray member = slots.get(structure + ":" + offset);
+    if (member == null) {
       unresolvedOperands++;
-      mergeComment(address, CommentType.EOL, structure + ", operand " + operand + ", delta " + delta + " (unresolved slot)");
       return;
     }
-    for (var reference : program.getReferenceManager().getReferencesFrom(address, operand)) {
-      if (reference.getSource() == SourceType.USER_DEFINED) {
-        unresolvedOperands++;
-        return;
+    saveAnnotation(address, structure + " + 0x" + Long.toHexString(offset) + ": " + slotText(member));
+    if (!structure.equals("DartObjectPool")) return;
+    JsonArray description = new JsonArray();
+    description.add(offset);
+    description.add(member);
+    appendFact(address, "poolDescriptions", description);
+    // L2 may already exist when L3 is imported manually. Keep its real READ/WRITE
+    // and character references; an exported description is not a new destination.
+    var l2 = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
+    if (l2 == null) return;
+    for (var reference : program.getReferenceManager().getReferencesFrom(address)) {
+      if (reference.getReferenceType() != RefType.READ && reference.getReferenceType() != RefType.WRITE) continue;
+      String json = l2.getString(reference.getToAddress());
+      if (json == null) continue;
+      var slot = JsonParser.parseString(json).getAsJsonObject();
+      if (slot.has("poolRef") && slot.has("index")
+          && slot.get("index").getAsLong() * 8 + 16 == offset) {
+        annotatePoolSlot(program, address, reference.getToAddress(), offset);
+        references++;
       }
     }
-    program.getReferenceManager().addMemoryReference(address, slot, RefType.DATA, SourceType.IMPORTED, operand);
-    mergeComment(address, CommentType.EOL, program.getListing().getComment(CommentType.EOL, slot));
-    references++;
   }
 
-  private void mergeComment(Address address, CommentType type, String text) {
-    var listing = program.getListing();
-    String previous = listing.getComment(type, address);
-    String marked = "[b4a] " + text;
-    if (previous != null && previous.contains(marked)) return;
-    // Full, untruncated records live in FACTS. Keep normal views bounded.
-    if (marked.length() > 8000) marked = marked.substring(0, 8000) + "… (full record in ghidart.b4a)";
-    if (previous != null && previous.length() > 16000) return;
-    listing.setComment(address, type, previous == null ? marked : previous + "\n" + marked);
-    comments++;
+  /** Attach L3 evidence to an L2-proved, pool-scoped slot. Never invent a pointer.
+   * Called by L2 after its native reference is established, and by a later L3 import.
+   */
+  public static void annotatePoolSlot(Program program, Address site, Address slot, long offset) {
+    var facts = program.getUsrPropertyManager().getStringPropertyMap(FACTS);
+    if (facts == null) return;
+    String json = facts.getString(site);
+    if (json == null) return;
+    var record = JsonParser.parseString(json).getAsJsonObject();
+    if (!record.has("poolDescriptions")) return;
+    var descriptions = new JsonArray();
+    String previous = facts.getString(slot);
+    var result = previous == null ? new JsonObject() : JsonParser.parseString(previous).getAsJsonObject();
+    if (result.has("poolDescriptions")) descriptions = result.getAsJsonArray("poolDescriptions");
+    for (var value : record.getAsJsonArray("poolDescriptions")) {
+      var row = value.getAsJsonArray();
+      if (row.get(0).getAsLong() != offset) continue;
+      if (!descriptions.contains(row.get(1))) descriptions.add(row.get(1));
+      appendAnnotation(program.getUsrPropertyManager().getStringPropertyMap(ANNOTATIONS),
+          slot, "b4a: " + slotText(row.get(1).getAsJsonArray()));
+    }
+    if (descriptions.isEmpty()) return;
+    result.add("poolDescriptions", descriptions);
+    facts.add(slot, result.toString());
+  }
+
+  private void appendFact(Address address, String kind, JsonElement value) {
+    String previous = facts.getString(address);
+    JsonObject object = previous == null ? new JsonObject() : JsonParser.parseString(previous).getAsJsonObject();
+    if (!object.has(kind)) object.add(kind, new JsonArray());
+    object.getAsJsonArray(kind).add(value);
+    facts.add(address, object.toString());
+  }
+
+  private void rememberNamespaces(Namespace owner) {
+    for (var symbol : program.getSymbolTable().getSymbols(owner)) {
+      if (symbol.getSymbolType() == ghidra.program.model.symbol.SymbolType.LABEL
+          && symbol.getSource() == SourceType.IMPORTED) symbol.delete();
+      else if (symbol.getSymbolType().isNamespace() && !symbol.getSymbolType().equals(
+          ghidra.program.model.symbol.SymbolType.FUNCTION) && symbol.getObject() instanceof Namespace child) {
+        obsoleteNamespaces.add(child);
+        rememberNamespaces(child);
+      }
+    }
+  }
+
+  private void pruneOldNamespaces() {
+    for (int i = obsoleteNamespaces.size() - 1; i >= 0; i--) {
+      Namespace owner = obsoleteNamespaces.get(i);
+      var symbol = owner.getSymbol();
+      if (!symbol.isDeleted() && symbol.getSource() == SourceType.IMPORTED
+          && !program.getSymbolTable().getSymbols(owner).hasNext()) symbol.delete();
+    }
+  }
+
+  private void saveAnnotation(Address address, String text) {
+    if (appendAnnotation(annotations, address, text)) comments++;
+  }
+
+  private static boolean appendAnnotation(StringPropertyMap map, Address address, String text) {
+    if (map == null) return false;
+    String previous = map.getString(address);
+    if (previous != null && (previous.contains(text) || previous.length() > 8000)) return false;
+    map.add(address, previous == null ? text : previous + "\n" + text);
+    return true;
+  }
+
+  private boolean isOurs(Namespace owner) {
+    while (!owner.isGlobal()) {
+      if ((owner.getName().equals("B4a") || owner.getName().equals("Library"))
+          && owner.getParentNamespace().isGlobal()) return true;
+      owner = owner.getParentNamespace();
+    }
+    return false;
+  }
+
+  private void publishFallbackNames() throws Exception {
+    for (var item : fallbackNames.entrySet()) {
+      monitor.checkCancelled();
+      if (!codeContains(item.getKey())) continue;
+      Address entry = program.getImageBase().add(item.getKey());
+      if (named.contains(entry)) continue;
+      var function = program.getFunctionManager().getFunctionAt(entry);
+      if (function == null || function.getSymbol().getSource() == SourceType.USER_DEFINED
+          || (function.getSymbol().getSource() == SourceType.IMPORTED && !isOurs(function.getParentNamespace()))) continue;
+      function.getSymbol().setNameAndNamespace(clean(item.getValue()),
+          namespace(root, "Runtime", false), SourceType.IMPORTED);
+      names++;
+    }
+  }
+
+  public static boolean isImported(Program program) {
+    return !program.getOptions("ghidart").getString(GENERATION, "").isEmpty();
   }
 
   private static String text(JsonObject object, String key, String fallback) {

@@ -91,6 +91,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
   private boolean analyze(
       Program program, AddressSetView set, TaskMonitor monitor, MessageLog log)
       throws CancelledException {
+    if (B4aImporter.isImported(program)) return true;
     Optional<Path> metadataPath = findMetadata(program);
     if (metadataPath.isEmpty()) {
       log.appendMsg(

@@ -148,10 +148,16 @@ Legacy `script_data.json` can still be supplied manually to regenerate older scr
 
 Ghidart reads `b4a.json` directly through **Dart b4a Import** (L3). It verifies
 original image identity and loaded RVA checks, applies Code boundaries, then streams
-semantic records into native namespaces, raw layouts, comments and logical slot
-references. Full declarations and aliases are retained in `ghidart.b4a` properties;
-**Dart → Show b4a Records** displays them. Logical slots live in non-loaded
-`B4aMetadata` memory in `OTHER`, never at invented runtime heap addresses.
+semantic records into hierarchical library/class namespaces, raw layouts and Listing-only
+annotations. Full declarations and aliases are retained at real code addresses in
+`ghidart.b4a` properties; **Dart → Show Dart Records** displays them. L2/L3 share
+`Library → URI path → class`; serialized graph identities are separate under `Dart Objects`.
+Descriptions appear in a Listing-only field, not in a synthetic text/zero memory image.
+L3 runs first and supplies preferred names and boundaries. L2 still decodes objects,
+strings and pool references, retaining L3 names and avoiding duplicate boundaries.
+For a proved L2 PP access, matching L3 descriptions attach to the existing scoped slot;
+string references retain their original file-backed destinations. Without a supported
+snapshot, descriptions do not fabricate runtime pointers or character addresses.
 
 Printed types/IL and pool descriptions remain presentation evidence. They are not
 parsed into replacement P-code, physical call contracts, string addresses or host

@@ -17,7 +17,7 @@ Dart AOT 的 Ghidra 扩展，目前支持 ARM64。
 - 可选原生堆基址表达式命名及明确长度的字符数据类型。
 - 可选解析 AOT 快照，恢复函数入口、明确长度的字符串和按池区分的对象池数据（L2）。
 - 可选 b4a 集成（L3）：从统一 `b4a.json` 导入边界、分层类/函数名、原始字段布局、
-  Thread/池槽位、操作数引用和已识别 IL 注释。
+  Thread/池描述、操作数引用和仅在 Listing 中显示的 IL。
 
 **仍是实验项目，正确性与稳定性尚未经过全面验证。** 未知间接跳转、SDK 或调用约定保留为未知。
 通用 native/FFI、动态栈上的活跃 Runtime 返回值和实机调试尚未完整支持或验收。
@@ -50,8 +50,10 @@ export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.2_PUBLIC
      或通过 One Shot 执行，创建函数、
      入口标签、字符串、对象关系和按池区分的数据。
    - 有匹配的 `b4a.json`：二进制旁存在配套 JSON 时，默认启用 **Dart b4a Import**（L3）。
-     仍可关闭、通过 One Shot 手动执行，或在分析选项中指定 **b4a.json path**。它同时创建边界；
-     **Dart AOT Code Boundaries** 仍可用于只导入边界。
+     仍可关闭、通过 One Shot 手动执行，或在分析选项中指定 **b4a.json path**。
+     L3 优先提供边界和名称；L2 继续解析对象、字符串和池引用，不重复创建 L3 的边界或覆盖其名称。
+     L3 失败时，边界也由 L2 提供。
+     **Dart ABI** 保持独立；**Dart AOT Code Boundaries** 仍可用于只导入边界。
    - 快照不可读或经过自定义修改：选中 managed 可执行区域，执行
      **Dart Machine Code Functions**（L1）；必要时通过 **Confirmed entry addresses** 补充入口。
 3. 选中关注的函数，执行 **Dart ABI**，然后打开反编译窗口。
@@ -98,10 +100,10 @@ ABI 恢复后，可选对选中函数运行 **Dart Value Uses**。它逐个反�
 对支持的快照，可在 **Dart ABI** 前执行 **Dart AOT Objects**。
 这个 L2 分析器独立读取映射中的快照符号，不依赖 b4a；创建函数边界及多入口标签，
 将字符串原始字符区定义到 **Defined Strings**，并在 `OTHER` 地址空间内不加载的 `DartObjects_*` 数据区中
-保存对象关系和池条目。通过 **Symbol Tree → Namespaces/Classes → Dart** 查看按库 URL、类、函数组织的层级。
+保存对象关系和池条目。通过 **Symbol Tree → Namespaces/Classes → Library** 查看按库 URL、类、函数组织的层级。
 顶层函数位于库作用域，归属已知的分配/字段 stub 位于相应类中。
 共享机器码在各所属作用域中保留声明标签，共用一个函数体。
-**Dart → ObjectPools → isolate → pool_<id> → slots** 可打开 Listing 中的逻辑池；
+**Library → ObjectPools → isolate → pool_<id> → slots** 可打开 Listing 中的逻辑池；
 各槽位注释显示 PP 偏移、类型、初始值和可修改标志。
 已确认的 PP 访问会引用池槽，直接加载字符串时也引用字符数据，
 可从 **Defined Strings → References** 返回代码。引用表示快照初始值，
@@ -118,7 +120,7 @@ Double 同时保留精确位模式。
 固定大小的用户类布局位于 **Data Type Manager → Dart → L2**。字段位置从目标字单位
 转换成字节偏移；tagged 槽位不冒充 native 指针，未知的 unboxed 数字类型保留为原始存储。
 继承字段沿已保留的父类关系命名。SDK 定义的 null、布尔值和 sentinel 等基础对象
-及内部 Class 对象位于 **Dart → VM → BaseObjects**。
+及内部 Class 对象位于 **Library → VM → BaseObjects**。
 VM 缓存对象保留独立编号标签，不猜测文件中没有的运行时内容。
 
 打开延迟单元 `*-<id>.part.so`／`.dylib` 时，将根文件及祖先单元放在旁边。
@@ -155,20 +157,29 @@ hash 只提供候选读取器：匹配失败后回退到完整结构解码，互
 大导出文件可能需要数分钟及磁盘临时空间；较小的内存 `/tmp` 可能耗尽。
 需要时在启动 Ghidra 前设置 Java 参数 `-Djava.io.tmpdir=/path/on/disk`。
 
-通过 **Symbol Tree → B4a → Libraries** 查看库、类和声明层级，
-通过 **B4a → Structures** 查看导出的 Thread/ObjectPool 槽位，
-通过 **Data Type Manager → Dart → B4a** 查看布局。物理函数保持单一所有者；
-共享代码的多个声明分别保留并建立链接。用户名称、注释、签名、类型和操作数引用受到保护。
-已识别 IL 和注释放在对应指令旁；完整记录（参数、签名、标志、未知 IL 等）保存在数据库属性中，
-在函数或槽位处选择 **Dart → Show b4a Records** 可以查看。
+通过 **Symbol Tree → Library → package/dart/app → 路径 → 类** 查看方法和别名，
+通过 **Data Type Manager → Dart → B4a → Classes** 查看原始类布局。
+不再建立重复的 `Entries` 树；缺少类声明的导出函数归入 **Library → Runtime**，用户修改受到保护。
 
-若没有 Dart 菜单，在 **File → Configure** 中启用 **DartViewsPlugin**。
-三个原生动作替代旧脚本，不再需要配置 Script Manager。
+IL 和操作数描述显示在 Listing 的 **Dart Analysis** 字段，不再写入反编译器读取的普通注释。
+**DartViewsPlugin** 在打开 Dart 程序时自动加入此字段；需要时在 **File → Configure** 中启用插件。
+完整记录可通过 **Dart → Show Dart Records** 查看。JSON 头部、Code 范围记录和空 padding
+不再生成可见的数据槽位。
 
-导出的池描述作为不透明文本保留，不将正文中的地址当作指针，不猜字符串位置，
-也不折叠可变池值。已解析的操作数引用指向 `B4aMetadata`（`OTHER`）中的导出逻辑槽位，
-不是运行时堆地址。L2 能解析快照时仍独立提供真实字符串数据和对象关系。
-逻辑 Dart 类型/签名不替代机器 ABI，反编译前仍照常执行 **Dart ABI**。
+L2/L3 共用库和类的层级。L3 优先提供名称、声明和边界；L2 提供对象、真实字符串字节和对象池身份。
+L2 也补充导出缺少的备用入口和不重叠 helper，不替换已有函数体；类作用域与记录按 CID 关联。
+导出的 Thread/池描述保留在 Listing；当 L2 证明的 PP 访问与导出偏移匹配时，描述附加到同一个按池区分的槽位。
+不再创建 `B4aValues` 副本或指向描述地址的引用；代码到字符的引用仍指向原始文件中的真实字符串。
+
+`Dart Objects` 保存序列化的 Class/Function/Code 身份及其关系，既不是方法，也不是运行时堆地址，
+目前使用人工的 `OTHER` 地址；对象关系也会出现在普通 XREF 列表中，不能将其当作机器码访问。
+将对象关系与普通 XREF 分开仍是待改进的展示问题。类和方法位于 `Library`，原始布局位于 Data Type Manager。
+`objs.txt` 是对象实例的文本 dump，不是类/地址接口；统一 JSON 提供类声明和布局，L2 提供对象图。
+快照无法解析时，L3 的名称和注释仍可使用，但不会伪造缺失的对象地址。**Dart ABI** 仍需照常运行。
+
+重新导入同一文档会升级旧的全零槽位和描述 overlay，保留用户代码名称和注释；
+修改过的合成元数据会被拒绝迁移，避免丢失用户工作。随后运行 **Dart AOT Objects** 补充或刷新 L2 对象图。
+旧 L2 数据库若需要干净的层级，请重新导入二进制。
 
 ## 兼容性
 

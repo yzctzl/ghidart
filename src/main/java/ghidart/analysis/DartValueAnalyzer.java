@@ -169,6 +169,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     int links = 0;
     int objectUses = 0;
     int valueNames = 0;
+    int nativeTypes = 0;
     int skipped = 0;
     int failed = 0;
     int timedOut = 0;
@@ -250,7 +251,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
             nameExpression(program, function, result.getHighFunction(), name.getKey(),
                 name.getValue(), semantics.types().get(name.getKey()));
           }
-          DartTypeContracts.apply(function, result.getHighFunction(), semantics.types());
+          nativeTypes += DartTypeContracts.apply(function, result.getHighFunction(), semantics.types());
           objectUses += semantics.uses().size();
           if (nameHeapBases) nameHeapBases(program, function, result.getHighFunction(), monitor);
           if (namePoolValues || nameThreadValues) valueNames += DartPoolReferences.nameValues(
@@ -270,7 +271,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     long seconds = (System.nanoTime() - started) / 1_000_000_000;
     String summary = functions + " functions, " + uses + " machine-value uses, "
         + links + " references/relations, " + objectUses + " L2 object uses; " + skipped + " skipped, " + failed
-        + " failed (" + timedOut + " timed out), " + valueNames + " PP/THR values named, " + seconds + " s.";
+        + " failed (" + timedOut + " timed out), " + nativeTypes + " native parameter/return types, "
+        + valueNames + " PP/THR values named, " + seconds + " s.";
     monitor.setMessage(getName() + ": " + summary);
     log.appendMsg(getName(), summary + " PP offsets are not pool entries.");
     return true;

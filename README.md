@@ -224,7 +224,9 @@ receiver for optional-argument methods. Other inputs may use only 32 bits; the
 receiver must remain a complete 64-bit tagged pointer. Dynamic optional stack
 locations remain unknown.
 Proved entry receiver and return types enrich native prototypes without changing
-parameter counts or physical storage. Callers can then use those return types for
+parameter counts or physical storage. Entry receiver relationships are available
+in Dart Records; Value Uses reports the number of native types applied.
+Callers can then use those return types for
 field access. Reanalysis revokes unchanged generated types before ABI recovery,
 so stale local types cannot recreate a revoked conclusion; user prototypes are preserved.
 Validated SDK allocation-root roles restore the x0 result where native liveness

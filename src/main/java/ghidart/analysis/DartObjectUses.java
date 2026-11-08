@@ -633,6 +633,13 @@ final class DartObjectUses {
       if (old != null && !old.isEquivalent(pointer)) continue; // Preserve edited types.
       types.put(node, old == null ? manager.addDataType(pointer, null) : old);
     }
+    var receiver = receivers.get(function.getEntryPoint());
+    var input = receiverStorage(function, receiver);
+    if (input != null) {
+      var reg = program.getRegister(input, 8);
+      uses.add(new ObjectUse(function.getEntryPoint().toString(), "receiver-input",
+          receiver.owner().toString(), reg == null ? input.toString() : reg.getName()));
+    }
     return new Result(List.copyOf(uses), names, types);
   }
 

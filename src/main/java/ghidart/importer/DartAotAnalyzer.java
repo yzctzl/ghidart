@@ -243,27 +243,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
       }
       if (existing != null) {
         if (payload.contains(existing.getBody())) {
-          // ELF debug symbols can create a one-byte placeholder, shorter than
-          // one ARM64 instruction. It is not an analyzed function body. Keep
-          // the imported name, but complete its validated instruction extent.
-          if (existing.getBody().getNumAddresses() == 1
-              && existing.getSymbol().getSource() != SourceType.USER_DEFINED
-              && existing.getSignatureSource() == SourceType.DEFAULT
-              && existing.getAllVariables().length == 0) {
-            AddressSet body = instructionBody(program, base, unit);
-            boolean overlaps = false;
-            var owners = program.getFunctionManager().getFunctionsOverlapping(body);
-            while (owners.hasNext()) {
-              if (!owners.next().equals(existing)) overlaps = true;
-            }
-            if (!overlaps && body.contains(entry)) {
-              try {
-                existing.setBody(body);
-              } catch (ghidra.program.database.function.OverlappingFunctionException e) {
-                // Another function owner always wins over an inferred extent.
-              }
-            }
-          }
+          completeLoaderPlaceholder(program, existing, expected);
           if (!expected.hasSameAddresses(existing.getBody())) {
             stats.functionsPreserved++;
             if (stats.functionsPreserved <= 5) {
@@ -279,7 +259,18 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
         continue;
       }
 
-      AddressSet body = instructionBody(program, base, unit);
+      AddressSet body = expected;
+      var owners = program.getFunctionManager().getFunctionsOverlapping(body);
+      if (body.contains(entry) && owners.hasNext()) {
+        Function alternate = owners.next();
+        boolean declaredEntry = unit.entries().stream()
+            .anyMatch(candidate -> base.add(candidate.rva()).equals(alternate.getEntryPoint()));
+        if (!owners.hasNext() && declaredEntry && relocateLoaderPlaceholder(program, alternate, entry, body)) {
+          stats.functionsCreated++;
+          monitor.increment();
+          continue;
+        }
+      }
       if (!body.contains(entry)
           || program.getFunctionManager().getFunctionContaining(entry) != null
           || program.getFunctionManager().getFunctionsOverlapping(body).hasNext()) {
@@ -311,6 +302,54 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
           + " existing bodies differing from decoded payloads; no forced replacement was made.");
     }
     return stats;
+  }
+
+  /** Complete an unanalysed loader placeholder at the preferred entry.
+   * Its entry and name survive; analyzed or conflicting owners always win.
+   */
+  private static boolean completeLoaderPlaceholder(Program program, Function function, AddressSet body) {
+    if (!loaderPlaceholder(function) || !body.contains(function.getEntryPoint())) return false;
+    var owners = program.getFunctionManager().getFunctionsOverlapping(body);
+    while (owners.hasNext()) if (!owners.next().equals(function)) return false;
+    try {
+      function.setBody(body);
+      return true;
+    } catch (ghidra.program.database.function.OverlappingFunctionException e) {
+      return false;
+    }
+  }
+
+  private static boolean loaderPlaceholder(Function function) {
+    return function.getBody().getNumAddresses() == 1
+        && function.getSymbol().getSource() != SourceType.USER_DEFINED
+        && function.getSignatureSource() == SourceType.DEFAULT
+        && function.getAllVariables().length == 0;
+  }
+
+  /** ELF symbols may start at a miss trampoline, before the method's frame.
+   * An untouched imported placeholder has no analysis to migrate. Keep the
+   * original symbol at its real address as a label; let F5 start at the validated
+   * normal entry. Never relocate an analyzed or user-defined function.
+   */
+  private static boolean relocateLoaderPlaceholder(Program program, Function function,
+      Address entry, AddressSet body) {
+    if (function.getSymbol().getSource() != SourceType.IMPORTED
+        || !function.getParentNamespace().isGlobal() || !loaderPlaceholder(function)) return false;
+    Address oldEntry = function.getEntryPoint();
+    String name = function.getName();
+    var namespace = function.getParentNamespace();
+    try {
+      if (!program.getFunctionManager().removeFunction(oldEntry)) return false;
+      program.getSymbolTable().createLabel(oldEntry, name, namespace, SourceType.IMPORTED);
+      program.getFunctionManager().createFunction("dart_" + Long.toUnsignedString(
+          entry.subtract(program.getImageBase()), 16), entry, body, SourceType.ANALYSIS);
+      return true;
+    } catch (ghidra.program.database.function.OverlappingFunctionException
+        | InvalidInputException e) {
+      // The enclosing publication transaction must roll back, including the
+      // removed placeholder, if creation fails after the ownership check.
+      throw new IllegalStateException("Cannot replace loader placeholder at " + oldEntry, e);
+    }
   }
 
   /** A validated payload supersedes machine-only splits, not user/imported work.
@@ -386,7 +425,8 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
       if (symbol != null && symbol.getSource() != SourceType.DEFAULT && !generated) continue;
       // One address can serve several entry roles. Keep the roles in the index,
       // not repeated in the label shown at every reference to this address.
-      String role = entry.roles().contains("monomorphic") ? "monomorphic_"
+      String role = entry.roles().contains("switchable_miss") ? "miss_"
+          : entry.roles().contains("monomorphic") ? "monomorphic_"
           : entry.roles().contains("unchecked") ? "unchecked_" : "";
       String name = "dart_" + role + "entry_" + Long.toUnsignedString(entry.rva(), 16);
       try {
@@ -411,7 +451,8 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
       if (!name.startsWith("dart_") || !name.contains("_entry_")) continue;
       String suffix = name.substring(name.lastIndexOf("_entry_") + 7);
       if (!suffix.matches("[0-9a-f]+")) continue;
-      String role = name.contains("monomorphic") ? "monomorphic_" : name.contains("unchecked") ? "unchecked_" : "";
+      String role = name.contains("_miss_") ? "miss_"
+          : name.contains("monomorphic") ? "monomorphic_" : name.contains("unchecked") ? "unchecked_" : "";
       try {
         var owner = program.getFunctionManager().getFunctionContaining(symbol.getAddress());
         if (owner == null) symbol.setName("dart_" + role + "entry_" + suffix, SourceType.ANALYSIS);

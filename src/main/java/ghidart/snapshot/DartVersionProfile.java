@@ -48,6 +48,14 @@ public final class DartVersionProfile {
     return codeEncoding;
   }
 
+  /** SDK Instructions::kPolymorphicEntryOffsetAOT on ARM64.
+   * Before the 2.19 class-id expansion, LoadClassId is one halfword load;
+   * newer SDKs use a load plus extraction. The miss/compare prefix grows by 4.
+   */
+  public int normalEntryOffset(long payloadInfo) {
+    return (payloadInfo & 1) == 0 ? 0 : topLevelCid16 ? 20 : 24;
+  }
+
   public int aotKind() {
     return preCanonicalSplit || codeFormat() == CodeFormat.MERGED_TABLE ? 2 : 3;
   }

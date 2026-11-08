@@ -240,6 +240,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         var objects = snapshot.objects();
         factsJson.toJson(objects, writer);
         factsJson.toJson(snapshot.table(), writer);
+        factsJson.toJson(snapshot.units(), writer);
         // Layout-dependent interpretations must agree as well as raw records.
         // Otherwise identical bytes could silently acquire different class/value links.
         var typeClasses = new java.util.TreeMap<Integer, Integer>();
@@ -388,12 +389,13 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         var code = codes.get(slot - table.firstEntryWithCode);
         if (code == null) continue;
         boolean mono = (code.payloadInfo & 1) != 0;
-        long normal = start + (mono ? 24 : 0);
+        long normal = start + objects.profile.normalEntryOffset(code.payloadInfo);
         long unchecked = code.payloadInfo >>> 1;
         addEntry(roles, normal, "normal", start, end);
         addEntry(roles, normal + unchecked, "unchecked", start, end);
         // ReadInstructions initializes all four cached entries even when they
         // coincide. Preserve their roles rather than dropping aliased entries.
+        if (mono) addEntry(roles, start, "switchable_miss", start, end);
         long monomorphic = start + (mono ? 8 : 0);
         addEntry(roles, monomorphic, "monomorphic", start, end);
         addEntry(roles, monomorphic + unchecked, "monomorphic_unchecked", start, end);
@@ -426,6 +428,9 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     String option = OWNER + "." + snapshot.scope();
     String identity = FACT_GENERATION + ":" + snapshot.identity() + ":"
         + snapshot.data() + ":" + snapshot.instructions();
+    // Older published facts used +24 even for the +20 ARM64 entry prefix.
+    // Do not silently retain their stale boundaries, call targets or user edits.
+    if (snapshot.objects().profile.normalEntryOffset(1) == 20) identity += ":arm64-entry20";
     String previous = program.getOptions(OWNER).getString(option, "");
     if (identity.equals(previous)) {
       enrich(program, snapshot, monitor, log);
@@ -433,7 +438,13 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       return;
     }
     // Never silently overwrite a previous generation, which may have user edits.
-    if (!previous.isEmpty()) throw new IOException("snapshot/schema changed; existing L2 generation preserved; use a fresh import");
+    if (!previous.isEmpty()) {
+      if (identity.endsWith(":arm64-entry20") && !previous.endsWith(":arm64-entry20")) {
+        throw new IOException("older ARM64 L2 facts used +24 instead of +20 normal entries; "
+            + "existing analysis preserved; use a fresh import");
+      }
+      throw new IOException("snapshot/schema changed; existing L2 generation preserved; use a fresh import");
+    }
     String blockName = "DartObjects_" + snapshot.scope();
     if (program.getMemory().getBlock(blockName) != null) throw new IOException("object block name conflict");
     var objects = snapshot.objects();
@@ -745,9 +756,9 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       publishSemanticFacts(program, snapshot, anchor, monitor);
       program.getOptions(OWNER).setInt(semantics, 1);
     }
-    if (program.getOptions(OWNER).getInt(option, 0) != 9) {
+    if (program.getOptions(OWNER).getInt(option, 0) != 10) {
       DartSnapshotSymbols.publish(program, snapshot, anchor, monitor, log);
-      program.getOptions(OWNER).setInt(option, 9);
+      program.getOptions(OWNER).setInt(option, 10);
     }
     String typeOption = OWNER + "." + snapshot.scope() + ".classTypes";
     if (program.getOptions(OWNER).getInt(typeOption, 0) != 5) {
@@ -863,7 +874,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     if (code.clusterIndex < 0) return null; // A deferred unit must supply its own image.
     int slot = code.clusterIndex + snapshot.table().firstEntryWithCode;
     long pc = snapshot.table().entries.get(slot).pcOffset();
-    return snapshot.instructions().add(pc + ((code.payloadInfo & 1) != 0 ? 24 : 0));
+    return snapshot.instructions().add(pc + snapshot.objects().profile.normalEntryOffset(code.payloadInfo));
   }
 
   /** File-backed destinations only; serialized identities are not heap addresses.

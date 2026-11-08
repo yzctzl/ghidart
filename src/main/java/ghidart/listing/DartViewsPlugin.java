@@ -121,6 +121,8 @@ public final class DartViewsPlugin extends ProgramPlugin {
         : program.getFunctionManager().getFunctionContaining(location);
     if (function != null) {
       lines.add("Current function: " + function.getName(true) + " @ " + function.getEntryPoint());
+      String scope = DartNamespaces.scopeDescription(function);
+      if (!scope.isEmpty()) lines.add(scope);
       lines.add("Physical prototype (" + function.getSignatureSource() + "): " + function.getPrototypeString(false, false));
       var uses = properties.getStringPropertyMap("ghidart.machineValueUses.v1");
       lines.add("Saved value analysis here: " + (uses != null && uses.hasProperty(function.getEntryPoint()) ? "present" : "not present"));

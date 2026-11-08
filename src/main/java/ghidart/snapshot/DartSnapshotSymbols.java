@@ -104,7 +104,7 @@ final class DartSnapshotSymbols {
       var declaration = objects.named(code.ownerRef);
       int slot = code.clusterIndex + snapshot.table().firstEntryWithCode;
       long pc = snapshot.table().entries.get(slot).pcOffset();
-      long normal = pc + ((code.payloadInfo & 1) != 0 ? 24 : 0);
+      long normal = pc + objects.profile.normalEntryOffset(code.payloadInfo);
       var function = program.getFunctionManager().getFunctionAt(snapshot.instructions().add(normal));
       if (function == null) continue;
       String old = function.getName();
@@ -134,49 +134,20 @@ final class DartSnapshotSymbols {
         if (pretty != null) label(function.getEntryPoint(), name, parent);
         continue;
       }
-      if (!old.equals(generated) && !old.equals(clean(pretty))
+      String legacyPretty = pretty == null ? null
+          : ghidra.program.model.symbol.SymbolUtilities.replaceInvalidChars(pretty, true);
+      if (!old.equals(generated) && !old.equals(clean(pretty)) && !old.equals(legacyPretty)
           && !(old.equals(name) && function.getParentNamespace().equals(parent))) continue;
       function.setParentNamespace(parent);
       function.setName(name, SourceType.ANALYSIS);
       scopedFunctions.add(function.getEntryPoint());
       functions++;
     }
-    // Function::code_index still identifies entries whose Code object was
-    // discarded. SDK FunctionDeserializationCluster + GetCodeByIndex use a
-    // one-based instruction-table index, with zero reserved for LazyCompile.
-    if (!objects.profile.codeTextOffsetDelta) {
-      var codeBySlot = new HashMap<Integer, DartClusterParser.CodeEntry>();
-      for (var code : objects.codes) if (code.clusterIndex >= 0) {
-        codeBySlot.put(code.clusterIndex + snapshot.table().firstEntryWithCode, code);
-      }
-      for (var declaration : objects.namedObjects) {
-        monitor.checkCancelled();
-        if (declaration.cid != objects.profile.cids.function) continue;
-        var serialized = objects.object(declaration.refId);
-        if (serialized == null || serialized.scalars().length == 0) continue;
-        long codeIndex = serialized.scalars()[0];
-        if (codeIndex <= 0 || codeIndex > snapshot.table().length) continue; // Lazy/deferred.
-        int slot = (int) codeIndex - 1;
-        long pc = snapshot.table().entries.get(slot).pcOffset();
-        var code = codeBySlot.get(slot);
-        if (code != null && (code.payloadInfo & 1) != 0) pc += 24;
-        var function = program.getFunctionManager().getFunctionAt(snapshot.instructions().add(pc));
-        if (function == null || function.getSymbol().getSource() == SourceType.USER_DEFINED
-            || function.getSymbol().getSource() == SourceType.IMPORTED) continue;
-        Namespace parent = owner(declaration.ownerRefId, new HashSet<>());
-        String name = clean(string(declaration.nameRefId, "function_" + declaration.refId));
-        if (scopedFunctions.contains(function.getEntryPoint())) {
-          label(function.getEntryPoint(), name, parent);
-        } else if (function.getName().equals("dart_" + Long.toUnsignedString(
-            function.getEntryPoint().subtract(program.getImageBase()), 16))
-            && function.getParentNamespace().isGlobal()) {
-          function.setParentNamespace(parent);
-          function.setName(name, SourceType.ANALYSIS);
-          scopedFunctions.add(function.getEntryPoint());
-          functions++;
-        }
-      }
-    }
+    // The same validated targets drive graph references and declaration scopes.
+    // In particular, loading-unit indices include the parent reference count;
+    // interpreting them again as local table slots silently loses ownership.
+    var destinations = DartSnapshotAnalyzer.fileTargets(program, snapshot);
+    functions += publishRetainedFunctions(scopedFunctions, destinations);
     for (var unit : snapshot.units()) {
       var function = program.getFunctionManager().getFunctionAt(
           program.getImageBase().add(unit.primaryEntry()));
@@ -187,7 +158,6 @@ final class DartSnapshotSymbols {
         function.setParentNamespace(namespace(namespace(root, "Unresolved", false), snapshot.scope(), false));
       }
     }
-    var destinations = DartSnapshotAnalyzer.fileTargets(program, snapshot);
     // ObjectStore roots identify shared stubs even when their Code has no named
     // Function owner. Use the decoded role, never an instruction hash or address.
     for (var role : objects.roots.references().entrySet()) {
@@ -225,7 +195,7 @@ final class DartSnapshotSymbols {
       monitor.checkCancelled();
       if (code.clusterIndex < 0) continue;
       int slot = code.clusterIndex + snapshot.table().firstEntryWithCode;
-      long pc = snapshot.table().entries.get(slot).pcOffset() + ((code.payloadInfo & 1) != 0 ? 24 : 0);
+      long pc = snapshot.table().entries.get(slot).pcOffset() + objects.profile.normalEntryOffset(code.payloadInfo);
       var function = program.getFunctionManager().getFunctionAt(snapshot.instructions().add(pc));
       if (function == null) continue;
       DartObjectGraph.name(program, identity(code.refId), "Code " + function.getName(true));
@@ -323,6 +293,54 @@ final class DartSnapshotSymbols {
           + ": " + string.value.length() + " code units, " + (string.isOneByte ? "Latin-1" : "UTF-16LE")
           + "; characters at " + data.add(string.dataOffset));
     }
+  }
+
+  /** Retained Function declarations also name entries whose Code was discarded.
+   * Shared implementations keep scoped aliases. Missing declarations stay unknown;
+   * a dispatch-table target alone proves neither a class nor a source library.
+   */
+  private int publishRetainedFunctions(Set<Address> scopedFunctions, Map<Integer, Address> destinations)
+      throws InvalidInputException, DuplicateNameException, CircularDependencyException,
+      CancelledException {
+    int changed = 0;
+    for (var declaration : objects.namedObjects) {
+      monitor.checkCancelled();
+      if (declaration.cid != objects.profile.cids.function) continue;
+      var serialized = objects.object(declaration.refId);
+      if (serialized == null || serialized.scalars().length == 0
+          || !objects.profile.codeTextOffsetDelta && serialized.scalars()[0] == 0) continue;
+      Address target = destinations.get(declaration.refId);
+      if (target == null) continue;
+      var function = program.getFunctionManager().getFunctionContaining(target);
+      if (function == null || function.getSymbol().getSource() == SourceType.USER_DEFINED) continue;
+      Namespace parent = owner(declaration.ownerRefId, new HashSet<>());
+      String name = clean(string(declaration.nameRefId, "function_" + declaration.refId));
+      // A loader or b4a may already provide the physical symbol. Keep it and
+      // its ownership intact; the retained declaration remains a scoped alias.
+      // A normal/unchecked entry can sit inside the one physical payload owner.
+      // Label that entry without splitting the body or moving its primary symbol.
+      if (!function.getEntryPoint().equals(target)
+          || function.getSymbol().getSource() == SourceType.IMPORTED || scopedFunctions.contains(target)) {
+        label(target, name, parent);
+        continue;
+      }
+      String generated = "dart_" + Long.toUnsignedString(target.subtract(program.getImageBase()), 16);
+      if (!function.getName().equals(generated)) {
+        label(target, name, parent);
+        continue;
+      }
+      Namespace previous = function.getParentNamespace();
+      if (!previous.isGlobal()
+          && !ghidart.listing.DartNamespaces.unresolvedScope(previous, snapshot.scope())) {
+        label(target, name, parent);
+        continue;
+      }
+      function.setParentNamespace(parent);
+      function.setName(name, SourceType.ANALYSIS);
+      scopedFunctions.add(target);
+      changed++;
+    }
+    return changed;
   }
 
   private Namespace owner(int ref, Set<Integer> active)

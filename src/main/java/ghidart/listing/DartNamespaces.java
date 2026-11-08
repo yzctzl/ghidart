@@ -45,6 +45,35 @@ public final class DartNamespaces {
     return owner;
   }
 
+  /** Generated fallback scopes describe snapshot provenance, not a Dart library. */
+  public static boolean unresolvedScope(Namespace owner, String scope) {
+    if (owner.isGlobal() || !owner.getName().equals(scope)
+        || owner.getSymbol().getSource() != SourceType.ANALYSIS) return false;
+    Namespace parent = owner.getParentNamespace();
+    return parent.getName().equals("Unresolved") && parent.getParentNamespace().isGlobal()
+        && parent.getSymbol().getSource() == SourceType.ANALYSIS;
+  }
+
+  /** Explain missing ownership separately from a retained library with no URI. */
+  static String scopeDescription(ghidra.program.model.listing.Function function) {
+    if (function == null) return "";
+    Namespace owner = function.getParentNamespace();
+    if (unresolvedScope(owner, owner.getName())) {
+      return "Code ownership: no declaration was assigned by L2. "
+          + owner.getName() + " identifies the snapshot scope, not a library. "
+          + "Code and ABI analysis remain available; matching b4a data may add ownership.";
+    }
+    for (Namespace current = owner; !current.isGlobal(); current = current.getParentNamespace()) {
+      if (current.getName().equals("UnknownSource")
+          && current.getParentNamespace().getName().equals("Packages")
+          && current.getParentNamespace().getParentNamespace().isGlobal()) {
+        return "Source location: the library identity is retained, but its source URI is unknown. "
+            + "The library and class hierarchy is independent of source-name recovery.";
+      }
+    }
+    return "";
+  }
+
   /** Move only extension-owned scopes; keep user-owned symbols and scope IDs.
    * Metadata labels leave the Symbol Tree entirely: they describe graph records,
    * not declarations. Empty former scaffolding is pruned bottom-up.

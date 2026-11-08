@@ -134,8 +134,18 @@ keeps object identities and pool slots as database records. Browse **Symbol Tree
 Namespaces → Packages / SDK / App / Runtime / Unresolved** for declarations. Package
 URIs retain package/path/class nesting. Obfuscated libraries without a recoverable
 URI appear under **Packages → UnknownSource**, not as guessed packages.
+**Unresolved → isolate / vm / loading-unit scope** instead contains code not assigned
+to a retained declaration. These are snapshot scopes, not libraries. Such code still
+has boundaries and ABI analysis; unavailable ownership or names are not guessed.
+**Dart → Analysis Status** and **Browse Dart Records** explain the selected function's
+scope. Matching b4a data can supply additional names and ownership.
 Top-level functions belong to their library; methods and known allocation/field stubs
 belong to their class. Shared code has one function body and scoped declaration aliases.
+Compiler-provided symbols are preserved; retained Dart declarations add aliases.
+An untouched Loader placeholder at a miss/alternate entry becomes a label when the
+real method function is created at its normal entry. Analyzed functions are preserved.
+Old Dart 2.10–2.18 databases published before the ARM64 +20 entry correction require
+a fresh import; ghidart reports this rather than silently keeping stale boundaries.
 Ghidra's Functions tree is mainly for global functions; use Namespaces for ownership
 and **Window → Functions** for a searchable table of all physical functions.
 

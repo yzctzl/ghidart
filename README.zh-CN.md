@@ -111,7 +111,16 @@ L1 ABI 分析依据机器码，不依赖快照 hash 或 Thread 布局配置。
 将字符串原始字符区定义到 **Defined Strings**，将对象身份和池槽保存为数据库记录。
 通过 **Symbol Tree → Namespaces → Packages / SDK / App / Runtime / Unresolved** 查看声明。
 包 URI 保留“包 → 路径 → 类”的层级；混淆后无法恢复 URI 的库归入 **Packages → UnknownSource**，不猜包名。
+**Unresolved → isolate / vm / 加载单元作用域** 则存放尚未归到保留声明的代码。
+这里是快照作用域，不是库名；代码仍可进行边界和 ABI 分析，不猜缺失的归属和名字。
+**Dart → Analysis Status** 和 **Browse Dart Records** 会解释当前函数的分类；
+匹配的 b4a 数据可以补充名字和所属关系。
 顶层函数属于库，方法及已知分配/字段 stub 属于类。共享代码保留单一函数体和各作用域的声明别名。
+编译器提供的符号保留在原地址，保留的 Dart 声明以别名补充。
+尚未分析的 Loader miss／其他入口占位体可转为标签，真实方法从 normal 入口创建函数；
+已经分析过的函数保持原样。
+Dart 2.10–2.18 的旧数据库若在 ARM64 +20 入口修正前已发布 L2，需重新导入；
+ghidart 会明确提示，不会静默沿用错误边界。
 Ghidra 的 Functions 树主要显示全局函数；按归属浏览使用 Namespaces，搜索全部物理函数使用 **Window → Functions**。
 
 在代码或字符串处选择 **Dart → Browse Dart Records**，通过停靠面板查看对象和池关系。

@@ -198,6 +198,8 @@ final class DartObjectProvider extends ComponentProviderAdapter {
   private void showDetails() {
     selectedLayout = null;
     var text = new StringBuilder(DartObjectGraph.describe(program, selected)).append('\n');
+    String scope = DartNamespaces.scopeDescription(program.getFunctionManager().getFunctionContaining(selected));
+    if (!scope.isEmpty()) text.append(scope).append('\n');
     var data = program.getListing().getDefinedDataAt(selected);
     appendCharacters(text, data);
     String slot = DartSlotViews.summary(program, selected);

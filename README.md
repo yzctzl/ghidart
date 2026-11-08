@@ -68,7 +68,9 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
      **Confirmed entry addresses** if needed.
 3. Select the functions of interest and run **Dart ABI**, then open the decompiler.
    ABI recovery is still required after L2 or b4a supplies boundaries.
-4. Optionally run **Dart Value Uses** after ABI recovery.
+4. Run **Dart Value Uses** to connect proved object types and pool values to pseudocode.
+   It recovers ABI first by default; disable **Recover ABI before value analysis**
+   only when deliberately retaining existing automatic contracts.
 
 All six analyzers are available under **Analysis → One Shot** for the Dart language.
 L2 and b4a import read their complete input, regardless of selection;
@@ -94,7 +96,9 @@ mixed numeric uses or escapes. These types describe observed accesses, not Dart
 classes or complete objects. Reanalysis revokes unchanged generated hints;
 edited layouts are preserved as user prototypes.
 
-After ABI recovery, optionally run **Dart Value Uses** on selected functions.
+Run **Dart Value Uses** on selected functions. By default it first recovers their
+physical ABI, then processes selected callees before callers. Unselected callees
+keep their existing contracts; include them in the selection when needed.
 It decompiles each selected function, so a whole-program run can take a long time.
 The task monitor shows the current function, stage and completed count. The
 per-function decompiler timeout defaults to 20 seconds and is configurable;
@@ -179,17 +183,25 @@ Open a deferred `*-<id>.part.so`/`.dylib` with its root and ancestor units besid
 L2 reads parent reference tables temporarily, validates program identity and applies
 that unit's Code/pool patches. For other filenames set **Parent AOT file** to the
 immediate parent binary. Missing/wrong parents reject L2 without inventing addresses.
-**Dart Value Uses** can name unambiguous pool/THR-load locals after ABI recovery; it
-preserves their inferred types and user edits. Names include available initial string/base-object
+**Dart Value Uses** names unambiguous pool/THR-load locals after ABI recovery;
+unknown word values use an unsigned physical word type, not a guessed object type.
+User edits are preserved. Names include available initial string/base-object
 hints, without folding mutable snapshot values. This binds names to native C
-variables, while retaining the actual memory reads. Ambiguous merged values and
-symbol-less temporary expressions stay inline. `Name THR values` controls Thread
+variables, while retaining the actual memory reads. Merged values without a whole-variable proof and symbol-less temporary expressions
+stay inline. `Name THR values` controls Thread
 load names; field names require b4a, otherwise the observed offset is used.
 It also tracks known class-allocation results and non-patchable pool instances
 through SSA copies and unambiguous merges. Exact field accesses link to retained
 Field declarations, including inherited fields; generated locals carry class/field
 names. Whole SSA locals proved to hold one full-width tagged Class use Ghidra's
 native shifted-pointer type (`ADJ(obj)->field`); compressed values remain integers.
+This also applies to stable pool instances and merged locals whose alternatives
+all prove the same Class. Different instances do not require different types;
+an unknown or patchable alternative prevents whole-local typing.
+Proved receiver and return types also enrich native prototypes without changing
+parameter counts or physical storage. Callers can then use those return types for
+field access. Reanalysis revokes unchanged generated types before ABI recovery,
+so stale local types cannot recreate a revoked conclusion; user prototypes are preserved.
 Stable string pool loads use Ghidra's native constant-pool operation, so literals
 appear inside pseudocode expressions, including Unicode. Their type is a managed
 `DartStringRef`, not a pointer to the file's character bytes. Patchable slots,

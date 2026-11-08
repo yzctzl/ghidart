@@ -105,6 +105,10 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
     // This also revokes stale hints when the option is subsequently disabled.
     var unreadableTypes = new HashSet<Address>();
     for (var function : bottomUp) {
+      DartTypeContracts.restore(function);
+      // Generated locals also carry types. Remove them before native recovery
+      // so revoked pool evidence cannot re-infer yesterday's return type.
+      DartValueAnalyzer.clear(program, function);
       if (!DartMemoryShapes.restore(program, function, log)) {
         unreadableTypes.add(function.getEntryPoint());
       }

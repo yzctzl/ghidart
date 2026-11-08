@@ -57,6 +57,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   private boolean namePoolValues = true;
   private static final String THREAD_NAMES = "Name THR values";
   private boolean nameThreadValues = true;
+  private static final String ABI_FIRST = "Recover ABI before value analysis";
+  private boolean recoverAbi = true;
   private static final String TIMEOUT = "Decompiler timeout (seconds)";
   private boolean nameHeapBases;
   private int timeoutSeconds = 20;
@@ -110,6 +112,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
 
   @Override
   public void registerOptions(Options options, Program program) {
+    options.registerOption(ABI_FIRST, true, null,
+        "Recover physical ABI first, then apply proved object types in call-graph order. Import remains manual.");
     options.registerOption(TIMEOUT, 20, null,
         "Maximum native decompiler time per function (1–300 seconds). "
             + "Timed-out functions are reported without inferred facts.");
@@ -123,6 +127,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
 
   @Override
   public void optionsChanged(Options options, Program program) {
+    recoverAbi = options.getBoolean(ABI_FIRST, true);
     nameHeapBases = options.getBoolean(HEAP_NAMES, false);
     namePoolValues = options.getBoolean(POOL_NAMES, true);
     nameThreadValues = options.getBoolean(THREAD_NAMES, true);
@@ -145,6 +150,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
 
   private boolean analyze(Program program, AddressSetView entries, TaskMonitor monitor,
       MessageLog log) throws CancelledException {
+    if (recoverAbi && !new DartAbiAnalyzer().added(program, entries, monitor, log)) return false;
     var objects = DartObjectUses.read(program, monitor);
     var decompiler = new DecompInterface();
     int functions = 0;
@@ -176,11 +182,15 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
         log.appendMsg(getName(), decompiler.getLastMessage());
         return false;
       }
-      var selected = program.getFunctionManager().getFunctions(entries, true);
+      var selected = new ghidra.program.model.util.AcyclicCallGraphBuilder(program, entries, false)
+          .getDependencyGraph(monitor);
+      monitor.initialize(total);
+      monitor.setIndeterminate(false);
       long visited = 0;
-      while (selected.hasNext()) {
+      while (!selected.isEmpty()) {
         monitor.checkCancelled();
-        var function = selected.next();
+        var function = program.getFunctionManager().getFunctionAt(selected.pop());
+        if (function == null) continue;
         visited++;
         String current = getName() + " " + visited + "/" + total + " at "
             + function.getEntryPoint();
@@ -192,6 +202,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
           }
           // Revoke old facts even if the new body cannot be decompiled. Never
           // delete a pre-existing or subsequently user-owned reference.
+          DartTypeContracts.restore(function);
           clear(program, function);
           if (function.getTags().stream().anyMatch(t ->
               t.getName().equals(DartFunctionAnalyzer.INCOMPLETE_TAG))) {
@@ -225,8 +236,10 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
           }
           property.add(function.getEntryPoint(), JSON.toJson(semantics.uses()));
           for (var name : semantics.names().entrySet()) {
-            nameExpression(program, function, result.getHighFunction(), name.getKey(), name.getValue(), semantics.types().get(name.getKey()));
+            nameExpression(program, function, result.getHighFunction(), name.getKey(),
+                name.getValue(), semantics.types().get(name.getKey()));
           }
+          DartTypeContracts.apply(function, result.getHighFunction(), semantics.types());
           objectUses += semantics.uses().size();
           if (nameHeapBases) nameHeapBases(program, function, result.getHighFunction(), monitor);
           if (namePoolValues || nameThreadValues) valueNames += DartPoolReferences.nameValues(
@@ -355,7 +368,11 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     if (facts == null) return false;
     try {
       var variable = value.getHigh();
-      if (variable == null || variable.getInstances().length != 1) return false;
+      if (variable == null) return false;
+      // Merged locals need a whole-variable type proof from DartObjectUses.
+      // A single load-site name alone must never name unrelated SSA definitions.
+      if (variable.getInstances().length != 1
+          && (provedType == null || variable.getSymbol() == null)) return false;
       // Respect Ghidra's native storage. A register-backed implied expression
       // (HighOther) can be made explicit at its defining instruction. Unique
       // temporaries without a symbol are deliberately left inline: fabricating
@@ -384,6 +401,13 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
           : value.getHigh() == null ? null : value.getHigh().getDataType();
       if (type == null || type.getLength() != value.getSize()) {
         type = ghidra.program.model.data.Undefined.getUndefinedDataType(value.getSize());
+      }
+      // Undefined locals remain implied expressions in native C even when a
+      // database name exists. For a named word load, expose its physical bits;
+      // signed operations still introduce their own casts. This is not an
+      // inferred Dart object type or a runtime value substitution.
+      if (value.getSize() == 8 && ghidra.program.model.data.Undefined.isUndefined(type)) {
+        type = ghidra.program.model.data.UnsignedLongLongDataType.dataType;
       }
       var local = function.addLocalVariable(new LocalVariableImpl(name, firstUse,
           type, storage, program), SourceType.ANALYSIS);
@@ -538,7 +562,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     return facts.names() == null ? new Facts(facts.uses(), facts.links()) : facts;
   }
 
-  private static void clear(Program program, Function function) {
+  static void clear(Program program, Function function) {
     var semantics = program.getUsrPropertyManager().getStringPropertyMap(OBJECT_USES);
     if (semantics != null) semantics.remove(function.getEntryPoint());
     var facts = read(program, function);

@@ -33,8 +33,8 @@ import java.util.Set;
  * one known implementation layout or a bounded set of candidate layouts. Only
  * copies, constant address arithmetic and unanimous merges preserve that fact.
  * Field relationships denote retained declarations, never physical heap storage.
- * Loads remain loads; signatures and P-code are unchanged. Whole SSA locals with
- * one proved full-width tagged Class may use native shifted-pointer types.
+ * Physical ABI storage stays unchanged. Whole SSA locals, proved receivers and
+ * returns of one full-width tagged Class may use native shifted-pointer types.
  * Compressed values remain integers; no runtime heap address is fabricated.
  */
 final class DartObjectUses {
@@ -73,6 +73,7 @@ final class DartObjectUses {
   private final Program program;
   private final Map<Address, ClassInfo> classes = new HashMap<>();
   private final Map<Address, Address> allocations = new HashMap<>();
+  private final Map<String, Address> nativeClasses = new HashMap<>();
   private final Set<Address> conflictingAllocations = new HashSet<>();
   private final Map<Address, Address> instances = new HashMap<>();
   private final Set<Address> immutableInstances = new HashSet<>();
@@ -135,6 +136,10 @@ final class DartObjectUses {
       index.classes.put(identity, new ClassInfo(identity, cid, size, word,
           cls.get("unboxedFields").getAsLong(), parent,
           layout.has("typePath") ? layout.get("typePath").getAsString() : null, new HashMap<>()));
+    }
+
+    for (var cls : index.classes.values()) {
+      if (cls.typePath != null) index.nativeClasses.put(cls.typePath, cls.identity);
     }
 
     // 2. Fields
@@ -464,16 +469,52 @@ final class DartObjectUses {
         }
       }
     }
+    // Pool loads and PHIs can already have a proved Class without being an
+    // allocation or a field result. Deliver that fact to the native local as
+    // well: otherwise a returned const instance remains undefined8 forever.
+    for (var it = high.getPcodeOps(); it.hasNext();) {
+      monitor.checkCancelled();
+      var op = it.next();
+      if (!function.getBody().contains(op.getSeqnum().getTarget()) || op.getOutput() == null
+          || (op.getOpcode() != PcodeOp.LOAD && op.getOpcode() != PcodeOp.MULTIEQUAL)) continue;
+      var object = value(op.getOutput(), high, values, active, 0, monitor);
+      if (object != null && object != CYCLE && object.displacement == 1
+          && !object.compressed && object.type != null) {
+        names.putIfAbsent(op.getOutput(), "object_" + name(object.type));
+      }
+    }
+    // Physical receiver inputs and returned objects need native prototype
+    // types too; they are not local-variable renames.
+    for (var it = high.getLocalSymbolMap().getSymbols(); it.hasNext();) {
+      var symbol = it.next();
+      if (!symbol.isParameter() || symbol.getHighVariable() == null) continue;
+      var node = symbol.getHighVariable().getRepresentative();
+      var object = value(node, high, values, active, 0, monitor);
+      if (object != null && object != CYCLE && object.type != null) names.putIfAbsent(node, "receiver_" + name(object.type));
+    }
+    for (var it = high.getPcodeOps(); it.hasNext();) {
+      var op = it.next();
+      if (op.getOpcode() != PcodeOp.RETURN || op.getNumInputs() != 2) continue;
+      var node = op.getInput(1);
+      var object = value(node, high, values, active, 0, monitor);
+      if (object != null && object != CYCLE && object.type != null) names.putIfAbsent(node, "object_" + name(object.type));
+    }
     var types = new IdentityHashMap<Varnode, DataType>();
     for (var node : names.keySet()) {
       var object = value(node, high, values, active, 0, monitor);
       if (object == null || object == CYCLE || object.displacement != 1 || object.compressed || object.type == null || node.getHigh() == null) continue;
       // One HighVariable can contain several SSA definitions. Typing only the
       // allocation result would incorrectly type unrelated register reuses or
-      // mixed-class merges that Ghidra grouped into the same local.
+      // mixed-class merges that Ghidra grouped into the same local. Different
+      // instances of the same Class share a type, not an object identity.
       boolean exact = true;
       for (var instance : node.getHigh().getInstances()) {
-        if (!object.equals(value(instance, high, values, active, 0, monitor))) { exact = false; break; }
+        var incoming = value(instance, high, values, active, 0, monitor);
+        if (incoming == null || incoming == CYCLE || incoming.compressed
+            || incoming.displacement != 1 || !object.type.equals(incoming.type)) {
+          exact = false;
+          break;
+        }
       }
       if (!exact) continue;
       var cls = classes.get(object.type);
@@ -636,6 +677,24 @@ final class DartObjectUses {
                   result = new ObjectValue(type, 1, null);
                 }
               } else if (callee != null) {
+                // Native return types published from whole-value evidence also
+                // reach callers. Keep physical storage and the +1 tag contract;
+                // a similarly named integer typedef is not an object pointer.
+                var returned = callee.getReturnType();
+                var plain = returned;
+                while (plain instanceof ghidra.program.model.data.TypeDef alias) plain = alias.getDataType();
+                var storage = callee.getReturn().getVariableStorage();
+                if (plain instanceof ghidra.program.model.data.Pointer pointer
+                    && pointer.getDataType() != null
+                    && ghidra.program.model.data.ComponentOffsetSettingsDefinition.DEF.getValue(returned.getDefaultSettings()) == 1
+                    && storage.isRegisterStorage() && storage.size() == 8
+                    && storage.getRegister().equals(program.getRegister("x0"))) {
+                  Address declaredClass = nativeClasses.get(pointer.getDataType().getPathName());
+                  if (declaredClass != null) {
+                    result = new ObjectValue(declaredClass, 1, null);
+                    break;
+                  }
+                }
                 int parameter = forwardedParameter(callee);
                 if (parameter >= 0 && op.getNumInputs() == callee.getParameterCount() + 1) {
                   result = value(op.getInput(parameter + 1), high, cache, active, depth + 1, monitor);

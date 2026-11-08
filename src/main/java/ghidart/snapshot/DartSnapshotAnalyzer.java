@@ -106,6 +106,8 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
           DartObjectGraph.migrate(program, monitor);
           ghidart.listing.DartNamespaces.migrate(program, monitor);
           for (Snapshot snapshot : snapshots) publish(program, snapshot, monitor, output.messages());
+          DartAotAnalyzer.shortenEntryLabels(program, monitor);
+          ghidart.listing.DartSlotViews.upgradeAnchors(program, monitor);
           ghidart.importer.B4aImporter.restoreModelReferences(program, monitor);
           monitor.checkCancelled();
           graph.flush();
@@ -758,9 +760,9 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       program.getOptions(OWNER).setInt(codeOption, 1);
     }
     String views = OWNER + "." + snapshot.scope() + ".slotViews";
-    if (program.getOptions(OWNER).getInt(views, 0) != 1) {
+    if (program.getOptions(OWNER).getInt(views, 0) != 2) {
       ghidart.listing.DartSlotViews.publishPools(program, snapshot, anchor, monitor);
-      program.getOptions(OWNER).setInt(views, 1);
+      program.getOptions(OWNER).setInt(views, 2);
     }
     String threadOption = OWNER + "." + snapshot.scope() + ".threadReferences";
     if (program.getOptions(OWNER).getInt(threadOption, 0) != 1) {

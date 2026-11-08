@@ -36,7 +36,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /** Discovers Dart AOT functions from validated Code payload boundaries. */
 public final class DartAotAnalyzer extends AbstractAnalyzer {
@@ -290,6 +289,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
       }
       monitor.increment();
     }
+    shortenEntryLabels(program, monitor);
     return stats;
   }
 
@@ -310,17 +310,50 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
     for (DartCodeIndex.Entry entry : unit.entries()) {
       Address address = base.add(entry.rva());
       Symbol symbol = program.getSymbolTable().getPrimarySymbol(address);
-      if (symbol != null && symbol.getSource() != SourceType.DEFAULT) {
-        continue;
-      }
-      String roles = entry.roles().stream().sorted().collect(Collectors.joining("_"));
-      String name =
-          "dart_" + roles + "_entry_" + Long.toUnsignedString(entry.rva(), 16);
+      boolean generated = symbol != null && symbol.getSource() == SourceType.ANALYSIS
+          && symbol.getSymbolType() == ghidra.program.model.symbol.SymbolType.LABEL
+          && symbol.getName().startsWith("dart_") && symbol.getName().contains("_entry_");
+      if (symbol != null && symbol.getSource() != SourceType.DEFAULT && !generated) continue;
+      // One address can serve several entry roles. Keep the roles in the index,
+      // not repeated in the label shown at every reference to this address.
+      String role = entry.roles().contains("monomorphic") ? "monomorphic_"
+          : entry.roles().contains("unchecked") ? "unchecked_" : "";
+      String name = "dart_" + role + "entry_" + Long.toUnsignedString(entry.rva(), 16);
       try {
-        program.getSymbolTable().createLabel(address, name, SourceType.ANALYSIS);
+        if (generated) symbol.setName(name, SourceType.ANALYSIS);
+        else program.getSymbolTable().createLabel(address, name, SourceType.ANALYSIS);
         stats.entryLabelsCreated++;
-      } catch (InvalidInputException ignored) {
+      } catch (InvalidInputException | ghidra.util.exception.DuplicateNameException ignored) {
         // A conflicting user/imported symbol is never replaced.
+      }
+    }
+  }
+
+  /** Upgrade only owned labels; function names and user/imported symbols survive. */
+  public static void shortenEntryLabels(Program program, TaskMonitor monitor) throws CancelledException {
+    var symbols = program.getSymbolTable().getAllSymbols(true);
+    while (symbols.hasNext()) {
+      monitor.checkCancelled();
+      var symbol = symbols.next();
+      if (symbol.getSource() != SourceType.ANALYSIS
+          || symbol.getSymbolType() != ghidra.program.model.symbol.SymbolType.LABEL) continue;
+      String name = symbol.getName();
+      if (!name.startsWith("dart_") || !name.contains("_entry_")) continue;
+      String suffix = name.substring(name.lastIndexOf("_entry_") + 7);
+      if (!suffix.matches("[0-9a-f]+")) continue;
+      String role = name.contains("monomorphic") ? "monomorphic_" : name.contains("unchecked") ? "unchecked_" : "";
+      try {
+        var owner = program.getFunctionManager().getFunctionContaining(symbol.getAddress());
+        if (owner == null) symbol.setName("dart_" + role + "entry_" + suffix, SourceType.ANALYSIS);
+        else if (symbol.getAddress().equals(owner.getEntryPoint())) symbol.delete();
+        else {
+          long displacement = symbol.getAddress().subtract(owner.getEntryPoint());
+          String offset = (displacement < 0 ? "m" : "p") + Long.toHexString(Math.abs(displacement));
+          symbol.setNameAndNamespace("entry_" + role + offset, owner, SourceType.ANALYSIS);
+        }
+      }
+      catch (InvalidInputException | ghidra.util.exception.DuplicateNameException | ghidra.program.model.listing.CircularDependencyException ignored) {
+        // A conflicting user symbol wins over a cosmetic label upgrade.
       }
     }
   }

@@ -1,4 +1,4 @@
-/** Show imported IL beside instructions without exporting it as decompiler comments. */
+/** Show pool/Thread values and imported IL beside their actual instruction uses. */
 package ghidart.listing;
 
 import docking.widgets.fieldpanel.field.AttributedString;
@@ -34,7 +34,13 @@ public final class B4aAnnotationFieldFactory extends FieldFactory {
     if (!enabled || !(proxy.getObject() instanceof CodeUnit unit)) return null;
     var map = unit.getProgram().getUsrPropertyManager().getStringPropertyMap(B4aImporter.ANNOTATIONS);
     String text = map == null ? null : map.getString(unit.getMinAddress());
-    if (text == null) return null;
+    var descriptions = new java.util.LinkedHashSet<String>();
+    if (unit instanceof ghidra.program.model.listing.Instruction) {
+      descriptions.addAll(DartSlotViews.at(unit.getProgram(), unit.getMinAddress()));
+    }
+    if (text != null) descriptions.addAll(java.util.Arrays.asList(text.split("\n")));
+    if (descriptions.isEmpty()) return null;
+    text = String.join("\n", descriptions);
     var lines = new ArrayList<FieldElement>();
     String[] parts = text.split("\n", 9);
     for (int i = 0; i < parts.length; i++) {

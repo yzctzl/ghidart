@@ -148,7 +148,14 @@ Targets use named `THR:offset` / `PP:offset` (or pool-specific PP spaces), not b
 memory or constant object pointers. Object-graph edges stay in Dart Records and do
 not enter ordinary XREFs. Unused fields have no invented references. THR offset XREFs come from decoded
 instructions without a layout; field names require the matching b4a export.
-L2 supplies pool identities independently.
+L2 supplies pool identities independently. **PP** is the register pointing to an
+**ObjectPool** (sometimes abbreviated OP), not a separate collection of objects.
+The slot value column shows the decoded **initial** value or string; THR shows a
+field/offset and `runtime value` when its contents are unavailable statically.
+The raw byte column stays unknown because these navigation models are not memory dumps.
+At actual load/store instructions, the **Dart Analysis** Listing field shows the
+corresponding slot or field description. Alternate-entry labels are scoped to their
+owning function instead of repeating entry roles in every XREF.
 These logical identities are not runtime heap addresses. Declaration relationships,
 types, logical signatures and decoded integers are retained as database properties;
 logical parameter counts do not replace machine-code ABI inference. Serialized
@@ -172,9 +179,12 @@ Open a deferred `*-<id>.part.so`/`.dylib` with its root and ancestor units besid
 L2 reads parent reference tables temporarily, validates program identity and applies
 that unit's Code/pool patches. For other filenames set **Parent AOT file** to the
 immediate parent binary. Missing/wrong parents reject L2 without inventing addresses.
-**Dart Value Uses** can name unambiguous pool-load locals after ABI recovery; it
+**Dart Value Uses** can name unambiguous pool/THR-load locals after ABI recovery; it
 preserves their inferred types and user edits. Names include available initial string/base-object
-hints, without folding mutable snapshot values.
+hints, without folding mutable snapshot values. This binds names to native C
+variables, while retaining the actual memory reads. Ambiguous merged values and
+symbol-less temporary expressions stay inline. `Name THR values` controls Thread
+load names; field names require b4a, otherwise the observed offset is used.
 It also tracks known class-allocation results and non-patchable pool instances
 through SSA copies and unambiguous merges. Exact field accesses link to retained
 Field declarations, including inherited fields; generated locals carry class/field

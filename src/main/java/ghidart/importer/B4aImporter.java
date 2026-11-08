@@ -43,7 +43,7 @@ import java.util.Set;
 public final class B4aImporter {
   public static final String FACTS = "ghidart.b4a";
   public static final String ANNOTATIONS = "ghidart.b4a.listing";
-  private static final int PRESENTATION = 5;
+  private static final int PRESENTATION = 6;
   private static final String GENERATION = "b4aGeneration";
   private final Program program;
   private final TaskMonitor monitor;
@@ -117,6 +117,7 @@ public final class B4aImporter {
       if (!identity.equals(hash(path, monitor))) throw new IllegalArgumentException("b4a file changed during import");
       importer.publishFallbackNames();
       ghidart.listing.DartSlotViews.pruneExport(program);
+      ghidart.listing.DartSlotViews.upgradeAnchors(program, monitor);
       importer.pruneOldNamespaces();
       options.setInt("b4aPresentation", PRESENTATION);
       options.setString(GENERATION, identity);

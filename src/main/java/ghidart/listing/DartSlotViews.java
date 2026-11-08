@@ -3,7 +3,8 @@ package ghidart.listing;
 import ghidart.snapshot.DartObjectGraph;
 import ghidart.snapshot.DartSnapshotAnalyzer;
 import ghidra.program.model.address.Address;
-import ghidra.program.model.data.Undefined8DataType;
+import ghidart.datatype.DartSlotDataType;
+import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.MemoryBlock;
@@ -89,12 +90,7 @@ public final class DartSlotViews {
   public static void slot(Program program, Address address, Namespace owner, String name,
       String description, SourceType source) throws IOException {
     try {
-      if (program.getListing().getDefinedDataContaining(address) == null) {
-        // Thread offsets can name byte flags inside a word. Do not invent an
-        // eight-byte field extent that would conflict with an adjacent anchor.
-        program.getListing().createData(address, address.getAddressSpace().getName().equals("THR")
-            ? ghidra.program.model.data.Undefined1DataType.dataType : Undefined8DataType.dataType);
-      }
+      defineAnchor(program, address);
       var primary = program.getSymbolTable().getPrimarySymbol(address);
       if (primary == null || primary.getSource() == SourceType.DEFAULT) {
         program.getSymbolTable().createLabel(address, DartNamespaces.clean(name), owner, source);
@@ -113,6 +109,94 @@ public final class DartSlotViews {
     } catch (Exception e) {
       throw new IOException("Cannot describe Dart slot " + address, e);
     }
+  }
+
+  private static void defineAnchor(Program program, Address address) throws Exception {
+    var data = program.getListing().getDefinedDataContaining(address);
+    if (data != null && Undefined.isUndefined(data.getDataType())) {
+      // These owned model bytes have never represented live memory. Keep names,
+      // comments and incoming XREFs while replacing the old ?? representation.
+      program.getListing().clearCodeUnits(data.getMinAddress(), data.getMaxAddress(), false);
+      data = null;
+    }
+    if (data == null) program.getListing().createData(address, new DartSlotDataType());
+  }
+
+  public static void upgradeAnchors(Program program, TaskMonitor monitor) throws IOException, CancelledException {
+    if (program.getOptions("ghidart").getInt("slotValuePresentation", 0) == 1) return;
+    try {
+      for (var block : program.getMemory().getBlocks()) {
+        if (!block.getName().startsWith("DartSlots_") || !block.isArtificial()) continue;
+        var range = new ghidra.program.model.address.AddressSet(block.getStart(), block.getEnd());
+        var data = program.getListing().getDefinedData(range, true);
+        var addresses = new ArrayList<Address>();
+        while (data.hasNext()) addresses.add(data.next().getAddress());
+        monitor.initialize(addresses.size(), "Updating Dart slot value display");
+        for (Address address : addresses) {
+          monitor.checkCancelled();
+          defineAnchor(program, address);
+          monitor.increment();
+        }
+      }
+      program.getOptions("ghidart").setInt("slotValuePresentation", 1);
+    } catch (CancelledException e) { throw e; }
+    catch (Exception e) { throw new IOException("Cannot update Dart slot display", e); }
+  }
+
+  /** A bounded user-facing description, shared by model data and use sites.
+   * Snapshot values remain explicitly initial values; Thread values are live
+   * process state. This routine does not dereference a fabricated heap pointer.
+   */
+  public static String summary(Program program, Address model) {
+    var block = program.getMemory().getBlock(model);
+    if (block == null || !block.getName().startsWith("DartSlots_")) return "";
+    var symbol = program.getSymbolTable().getPrimarySymbol(model);
+    String name = symbol == null ? "offset_" + Long.toHexString(model.getOffset()) : symbol.getName();
+    if (block.getName().equals("DartSlots_THR")) {
+      return "THR+0x" + Long.toHexString(model.getOffset()) + " (" + name + "): runtime value";
+    }
+    Address record = forRecord(program, model);
+    if (record != null) {
+      var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
+      String stored = facts == null ? null : facts.getString(record);
+      if (stored != null) {
+        var slot = com.google.gson.JsonParser.parseString(stored).getAsJsonObject();
+        if (slot.has("poolRef") && slot.has("index")) {
+          String prefix = "PP+0x" + Long.toHexString(model.getOffset()) + " [pool "
+              + slot.get("poolRef").getAsInt() + ", slot " + slot.get("index").getAsInt() + "] initial: ";
+          if (slot.has("kind") && slot.get("kind").getAsString().equals("IMMEDIATE")) {
+            return prefix + "0x" + Long.toHexString(slot.get("imm").getAsLong());
+          }
+          for (var edge : DartObjectGraph.from(program, record)) {
+            var data = program.getListing().getDataAt(edge.getToAddress());
+            if (data != null && data.hasStringValue()) {
+              String value = String.valueOf(data.getValue());
+              int end = value.offsetByCodePoints(0, Math.min(80, value.codePointCount(0, value.length())));
+              return prefix + "String " + new com.google.gson.Gson().toJson(value.substring(0, end))
+                  + (end < value.length() ? "…" : "");
+            }
+          }
+          String text = program.getListing().getComment(CommentType.EOL, record);
+          return prefix + (text == null ? slot.get("kind").getAsString()
+              : text.replaceFirst("^PP\\+0x[0-9a-f]+ \\[\\d+\\] ", ""));
+        }
+      }
+    }
+    String text = program.getListing().getComment(CommentType.EOL, model);
+    return "PP+0x" + Long.toHexString(model.getOffset()) + " (" + name + ")"
+        + (text == null ? ": value unavailable" : ": " + text.replace("Offset model; not runtime memory. ", ""));
+  }
+
+  public static List<String> at(Program program, Address address) {
+    var lines = new java.util.LinkedHashSet<String>();
+    String own = summary(program, address);
+    if (!own.isEmpty()) lines.add(own);
+    for (var ref : program.getReferenceManager().getReferencesFrom(address)) {
+      if (!ref.getReferenceType().isRead() && !ref.getReferenceType().isWrite()) continue;
+      String value = summary(program, ref.getToAddress());
+      if (!value.isEmpty()) lines.add(value);
+    }
+    return List.copyOf(lines);
   }
 
   private record ThreadAccess(Address site, RefType type, int width) {}
@@ -179,9 +263,6 @@ public final class DartSlotViews {
       for (var entry : accesses.entrySet()) {
         monitor.checkCancelled();
         Address target = start.add(entry.getKey());
-        if (program.getListing().getDefinedDataContaining(target) == null) {
-          program.getListing().createData(target, ghidra.program.model.data.Undefined1DataType.dataType);
-        }
         String widths = entry.getValue().stream().map(access -> access.width()).distinct().sorted()
             .map(Object::toString).collect(java.util.stream.Collectors.joining(", "));
         slot(program, target, owner, "offset_" + Long.toHexString(entry.getKey()),

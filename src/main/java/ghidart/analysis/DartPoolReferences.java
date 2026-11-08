@@ -126,10 +126,11 @@ public final class DartPoolReferences {
    * Multiple LOADs/slots at one instruction are deliberately left unchanged;
    * a native reference alone does not identify which SSA output carries a value.
    */
-  static void nameValues(Program program, ghidra.program.model.listing.Function function,
-      ghidra.program.model.pcode.HighFunction high, TaskMonitor monitor) throws CancelledException {
+  static int nameValues(Program program, ghidra.program.model.listing.Function function,
+      ghidra.program.model.pcode.HighFunction high, boolean poolNames, boolean threadNames,
+      TaskMonitor monitor) throws CancelledException {
     var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
-    if (facts == null) return;
+    int named = 0;
     var loads = new HashMap<Address, java.util.List<PcodeOp>>();
     for (var it = high.getPcodeOps(); it.hasNext();) {
       monitor.checkCancelled();
@@ -146,7 +147,7 @@ public final class DartPoolReferences {
       boolean ambiguous = false;
       for (var reference : ghidart.snapshot.DartObjectGraph.from(program, site.getKey())) {
         if (reference.getReferenceType() != RefType.READ) continue;
-        String json = facts.getString(reference.getToAddress());
+        String json = facts == null ? null : facts.getString(reference.getToAddress());
         if (json == null) continue;
         var slot = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
         if (!slot.has("poolRef") || !slot.has("index")) continue;
@@ -154,12 +155,27 @@ public final class DartPoolReferences {
         offset = slot.get("index").getAsLong() * 8 + 16;
         poolSlot = reference.getToAddress();
       }
-      if (!ambiguous && offset != null) {
-        DartValueAnalyzer.nameExpression(program, function, high,
+      if (poolNames && !ambiguous && offset != null) {
+        if (DartValueAnalyzer.nameExpression(program, function, high,
             site.getValue().getFirst().getOutput(),
-            "pp_" + Long.toHexString(offset) + valueName(program, poolSlot));
+            "pp_" + Long.toHexString(offset) + valueName(program, poolSlot))) named++;
+      } else if (threadNames && offset == null) {
+        Address field = null;
+        for (var reference : program.getReferenceManager().getReferencesFrom(site.getKey())) {
+          var block = program.getMemory().getBlock(reference.getToAddress());
+          if (!reference.getReferenceType().isRead() || block == null || !block.getName().equals("DartSlots_THR")) continue;
+          if (field != null && !field.equals(reference.getToAddress())) { ambiguous = true; break; }
+          field = reference.getToAddress();
+        }
+        if (!ambiguous && field != null) {
+          var symbol = program.getSymbolTable().getPrimarySymbol(field);
+          String name = symbol == null ? "offset_" + Long.toHexString(field.getOffset()) : symbol.getName();
+          if (DartValueAnalyzer.nameExpression(program, function, high,
+              site.getValue().getFirst().getOutput(), "thr_" + name)) named++;
+        }
       }
     }
+    return named;
   }
 
   /** An initial-value hint, never a substitution for a mutable pool load.

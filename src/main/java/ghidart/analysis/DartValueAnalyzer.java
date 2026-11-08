@@ -30,7 +30,6 @@ import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.LocalVariableImpl;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.listing.VariableStorage;
-import ghidra.program.model.pcode.DynamicHash;
 import ghidra.program.model.pcode.HighFunction;
 import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.Varnode;
@@ -56,6 +55,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   private static final String HEAP_NAMES = "Name heap-base expressions";
   private static final String POOL_NAMES = "Name L2 pool values";
   private boolean namePoolValues = true;
+  private static final String THREAD_NAMES = "Name THR values";
+  private boolean nameThreadValues = true;
   private static final String TIMEOUT = "Decompiler timeout (seconds)";
   private boolean nameHeapBases;
   private int timeoutSeconds = 20;
@@ -82,7 +83,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   }
 
   private record Link(String from, String to, String kind) {}
-  private record Named(long symbol, String name, long type, long hash, int firstUse) {}
+  private record Named(long symbol, String name, long type, long hash, int firstUse, String storage) {}
   private record Facts(List<Use> uses, List<Link> links, List<Named> names) {
     Facts(List<Use> uses, List<Link> links) {
       this(uses, links, List.of());
@@ -114,6 +115,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
             + "Timed-out functions are reported without inferred facts.");
     options.registerOption(POOL_NAMES, true, null,
         "Name unambiguous local pool loads using validated L2 slot references; does not fold snapshot values.");
+    options.registerOption(THREAD_NAMES, true, null,
+        "Name unambiguous THR loads from proved field references; no runtime values are assumed.");
     options.registerOption(HEAP_NAMES, false, null,
         "Name exact HBS << 32 expressions using native local symbols; no P-code replacement.");
   }
@@ -122,6 +125,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   public void optionsChanged(Options options, Program program) {
     nameHeapBases = options.getBoolean(HEAP_NAMES, false);
     namePoolValues = options.getBoolean(POOL_NAMES, true);
+    nameThreadValues = options.getBoolean(THREAD_NAMES, true);
     timeoutSeconds = Math.max(1, Math.min(300, options.getInt(TIMEOUT, 20)));
   }
 
@@ -147,6 +151,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     int uses = 0;
     int links = 0;
     int objectUses = 0;
+    int valueNames = 0;
     int skipped = 0;
     int failed = 0;
     int timedOut = 0;
@@ -224,7 +229,8 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
           }
           objectUses += semantics.uses().size();
           if (nameHeapBases) nameHeapBases(program, function, result.getHighFunction(), monitor);
-          if (namePoolValues) DartPoolReferences.nameValues(program, function, result.getHighFunction(), monitor);
+          if (namePoolValues || nameThreadValues) valueNames += DartPoolReferences.nameValues(
+              program, function, result.getHighFunction(), namePoolValues, nameThreadValues, monitor);
           functions++;
           uses += facts.uses().size();
         } finally {
@@ -240,7 +246,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     long seconds = (System.nanoTime() - started) / 1_000_000_000;
     String summary = functions + " functions, " + uses + " machine-value uses, "
         + links + " references/relations, " + objectUses + " L2 object uses; " + skipped + " skipped, " + failed
-        + " failed (" + timedOut + " timed out), " + seconds + " s.";
+        + " failed (" + timedOut + " timed out), " + valueNames + " PP/THR values named, " + seconds + " s.";
     monitor.setMessage(getName() + ": " + summary);
     log.appendMsg(getName(), summary + " PP offsets are not pool entries.");
     return true;
@@ -310,9 +316,9 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
 
   /**
    * Give a transparent intermediate a native name, not an opaque userop.
-   * Ghidra's dynamic-local hash identifies an SSA expression for display; it is
-   * not a snapshot/version hash or a compatibility decision. Zero/ambiguous
-   * hashes and occupied local storage are skipped, not forcibly matched.
+   * Use the decompiler's own storage when available. Symbol-less physical
+   * register results can be named at their defining instruction; symbol-less
+   * unique temporaries stay inline. Ambiguous or occupied storage is skipped.
    */
   private static void nameHeapBases(Program program, Function function, HighFunction high,
       TaskMonitor monitor) throws CancelledException {
@@ -342,22 +348,38 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
   /** An optional proved type is applied only when creating a new owned local. */
   private static boolean nameExpression(Program program, Function function, HighFunction high,
       Varnode value, String preferred, ghidra.program.model.data.DataType provedType) {
-    if (value == null || value.isInput() || (value.getSize() != 4 && value.getSize() != 8)
+    if (value == null || value.isInput() || (value.getSize() != 1 && value.getSize() != 2 && value.getSize() != 4 && value.getSize() != 8)
         || value.getHigh() instanceof ghidra.program.model.pcode.HighParam
         || value.getHigh() instanceof ghidra.program.model.pcode.HighGlobal) return false;
     var facts = read(program, function);
     if (facts == null) return false;
-    var dynamic = new DynamicHash(value, high);
-    if (dynamic.getHash() == 0 || dynamic.getAddress() == null) return false;
     try {
-      var storage = new VariableStorage(program, AddressSpace.HASH_SPACE.getAddress(dynamic.getHash()), value.getSize());
+      var variable = value.getHigh();
+      if (variable == null || variable.getInstances().length != 1) return false;
+      // Respect Ghidra's native storage. A register-backed implied expression
+      // (HighOther) can be made explicit at its defining instruction. Unique
+      // temporaries without a symbol are deliberately left inline: fabricating
+      // a hash local for them can save a name that never appears in the C view.
+      var symbol = variable.getSymbol();
+      VariableStorage storage;
+      ghidra.program.model.address.Address defined;
+      if (symbol != null) {
+        symbol.resolveStorage();
+        storage = symbol.getStorage();
+        defined = symbol.getPCAddress();
+      } else {
+        if (!value.isRegister() || value.getDef() == null) return false;
+        storage = new VariableStorage(program, value.getAddress(), value.getSize());
+        defined = value.getDef().getSeqnum().getTarget();
+      }
+      if (storage.isUnassignedStorage() || storage.size() != value.getSize()) return false;
       for (var local : function.getLocalVariables()) {
         if (local.getVariableStorage().equals(storage)) return false;
       }
       String name = preferred;
       for (int suffix = 1; program.getSymbolTable().getVariableSymbol(name, function) != null;
           suffix++) name = preferred + "_" + suffix;
-      int firstUse = (int) dynamic.getAddress().subtract(function.getEntryPoint());
+      int firstUse = defined == null ? 0 : (int) defined.subtract(function.getEntryPoint());
       var type = provedType != null ? provedType
           : value.getHigh() == null ? null : value.getHigh().getDataType();
       if (type == null || type.getLength() != value.getSize()) {
@@ -367,7 +389,9 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
           type, storage, program), SourceType.ANALYSIS);
       var names = new ArrayList<Named>(facts.names());
       names.add(new Named(local.getSymbol().getID(), name,
-          program.getDataTypeManager().getID(local.getDataType()), dynamic.getHash(), firstUse));
+          program.getDataTypeManager().getID(local.getDataType()),
+          storage.isHashStorage() ? storage.getFirstVarnode().getOffset() : 0, firstUse,
+          storage.getSerializationString()));
       program.getUsrPropertyManager().getStringPropertyMap(PROPERTY).add(function.getEntryPoint(),
           JSON.toJson(new Facts(facts.uses(), facts.links(), names)));
       return true;
@@ -526,8 +550,10 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
             && local.getName().equals(owned.name())
             && program.getDataTypeManager().getID(local.getDataType()) == owned.type()
             && local.getFirstUseOffset() == owned.firstUse()
-            && local.getVariableStorage().isHashStorage()
-            && local.getFirstStorageVarnode().getOffset() == owned.hash()) {
+            && (owned.storage() != null
+                ? owned.storage().equals(local.getVariableStorage().getSerializationString())
+                : local.getVariableStorage().isHashStorage()
+                    && local.getFirstStorageVarnode().getOffset() == owned.hash())) {
           function.removeVariable(local);
         }
       }

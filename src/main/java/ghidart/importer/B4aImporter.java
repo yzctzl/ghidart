@@ -43,7 +43,7 @@ import java.util.Set;
 public final class B4aImporter {
   public static final String FACTS = "ghidart.b4a";
   public static final String ANNOTATIONS = "ghidart.b4a.listing";
-  private static final int PRESENTATION = 6;
+  private static final int PRESENTATION = 7;
   private static final String GENERATION = "b4aGeneration";
   private final Program program;
   private final TaskMonitor monitor;
@@ -461,6 +461,53 @@ public final class B4aImporter {
     var record = previous == null ? new JsonObject() : JsonParser.parseString(previous).getAsJsonObject();
     record.add("class", JsonParser.parseString(cls));
     facts.add(identity, record.toString());
+    enrichClassLayout(program, identity, cid, JsonParser.parseString(cls).getAsJsonObject());
+  }
+
+  /** Fill unnamed L2 slots from the validated b4a layout in either import order.
+   * Keep the native Structure object so existing tagged pointers see the names.
+   * Storage, retained L2 names and user edits are never replaced.
+   */
+  private static void enrichClassLayout(Program program, Address identity, int cid, JsonObject cls) {
+    var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
+    String raw = facts == null ? null : facts.getString(identity);
+    if (raw == null || !cls.has("size")) return;
+    var object = JsonParser.parseString(raw).getAsJsonObject();
+    if (!object.has("layout")) return;
+    var layout = object.getAsJsonObject("layout");
+    var manager = program.getDataTypeManager();
+    var targetType = manager.getDataType(layout.get("typePath").getAsString());
+    var sourceType = manager.getDataType(new CategoryPath("/Dart/B4a/Classes"),
+        "Class_" + cid + "_" + clean(text(cls, "name", "unnamed")));
+    if (!(targetType instanceof ghidra.program.model.data.Structure target)
+        || !(sourceType instanceof ghidra.program.model.data.Structure source)
+        || target.getLength() != cls.get("size").getAsInt()
+        || source.getLength() != target.getLength()) return;
+    int word = layout.get("word").getAsInt();
+    var names = new java.util.HashSet<String>();
+    for (var field : target.getDefinedComponents()) names.add(field.getFieldName());
+    for (var field : source.getDefinedComponents()) {
+      int offset = field.getOffset();
+      var slot = target.getComponentAt(offset);
+      if (offset < 8 || slot == null || slot.getOffset() != offset
+          || slot.getLength() != word || field.getLength() != word
+          || !("slot_" + Integer.toHexString(offset)).equals(slot.getFieldName())
+          || field.getFieldName() == null || names.contains(field.getFieldName())) continue;
+      String comment = slot.getComment();
+      boolean tagged = "Tagged value".equals(comment)
+          && slot.getDataType().getName().equals("DartTagged" + word * 8)
+          && slot.getDataType().getCategoryPath().equals(target.getCategoryPath())
+          && slot.getDataType() instanceof ghidra.program.model.data.TypeDef alias
+          && alias.getDataType().isEquivalent(word == 4
+              ? ghidra.program.model.data.DWordDataType.dataType
+              : ghidra.program.model.data.QWordDataType.dataType);
+      boolean unboxed = "Unboxed bits; numeric type is not implied".equals(comment)
+          && Undefined.isUndefined(slot.getDataType());
+      if (!tagged && !unboxed) continue;
+      slot.setFieldName(field.getFieldName());
+      slot.setComment(comment + "; b4a field name");
+      names.add(field.getFieldName());
+    }
   }
 
   private void publishLayout(JsonObject cls) throws Exception {

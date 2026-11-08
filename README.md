@@ -156,6 +156,9 @@ mutation. Serialized string prefixes are separate from their characters.
 slot using the same evidence checks as the decompiler. Mutable slots, ambiguous
 origins and unsupported characters retain their original loads. **Class Layout**
 in Dart Records selects the decoded Class structure in Ghidra's Data Types tree.
+When matching b4a class layouts are present, unnamed L2 slots acquire their field
+names in this same native Structure. Both import orders work; sizes, storage and
+user-edited members remain unchanged.
 
 Validated L2/L3 payloads reconcile untouched L1 function splits; user/imported
 names, prototypes, local variables and modified bodies remain protected. Changed

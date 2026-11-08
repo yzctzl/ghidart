@@ -148,6 +148,9 @@ final class DartSnapshotTypes {
         manager.addDataType(type, null);
         created++;
       }
+      // L3 can be imported before or after L2. Enrich this same Structure,
+      // rather than making native tagged pointers use a parallel class model.
+      ghidart.importer.B4aImporter.annotateClass(program, identity, cls.classId);
     }
     log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + created
         + " target class layouts, " + existing + " existing layouts preserved, " + skipped

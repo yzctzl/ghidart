@@ -750,9 +750,9 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       program.getOptions(OWNER).setInt(option, 9);
     }
     String typeOption = OWNER + "." + snapshot.scope() + ".classTypes";
-    if (program.getOptions(OWNER).getInt(typeOption, 0) != 4) {
+    if (program.getOptions(OWNER).getInt(typeOption, 0) != 5) {
       DartSnapshotTypes.publish(program, snapshot, monitor, log);
-      program.getOptions(OWNER).setInt(typeOption, 4);
+      program.getOptions(OWNER).setInt(typeOption, 5);
     }
     String codeOption = OWNER + "." + snapshot.scope() + ".functionCodes";
     if (program.getOptions(OWNER).getInt(codeOption, 0) != 1) {

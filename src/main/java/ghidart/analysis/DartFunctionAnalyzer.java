@@ -52,6 +52,27 @@ public final class DartFunctionAnalyzer extends AbstractAnalyzer {
   private String configuredEntries = "";
   private boolean scanEntries = true;
 
+  /** A stronger source may name an entry, but only untouched L1 bodies are replaceable.
+   * L2 may have renamed an ANALYSIS symbol since discovery. Match the saved body
+   * and no-return state, and independently protect user/imported symbols and locals.
+   */
+  public static boolean ownsUnmodifiedBody(Program program,
+      ghidra.program.model.listing.Function function) {
+    var saved = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L1.functions");
+    String previous = saved == null ? null : saved.getString(function.getEntryPoint());
+    if (previous == null
+        || !function.getSymbol().getSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS)
+        || !function.getSignatureSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS)) return false;
+    for (var variable : function.getAllVariables()) {
+      if (!variable.getSource().isLowerOrEqualPriorityThan(SourceType.ANALYSIS)) return false;
+    }
+    var body = new StringBuilder(":").append(function.hasNoReturn());
+    for (var range : function.getBody()) {
+      body.append(';').append(range.getMinAddress()).append('-').append(range.getMaxAddress());
+    }
+    return previous.endsWith(body.toString());
+  }
+
   public DartFunctionAnalyzer() {
     super("Dart Machine Code Functions", "Recover Dart functions from entries, calls and CFG.",
         AnalyzerType.BYTE_ANALYZER);

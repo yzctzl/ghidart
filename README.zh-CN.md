@@ -127,6 +127,11 @@ Ghidra 的 Functions 树主要显示全局函数；按归属浏览使用 Namespa
 与反编译器共用证据检查。可变槽位、来源不唯一或字符无法无损表示时保留原始加载。
 记录面板的 **Class Layout** 可直接在 Ghidra Data Types 树中定位已解码的类结构。
 
+经验证的 L2/L3 payload 会合并未经修改的 L1 函数拆分；用户或导入的名称、原型、局部变量，
+以及手改函数体均受保护。范围改变会撤销旧的值使用事实，之后对这些函数重新运行
+**Dart Value Uses**。
+
+
 **Library → THR** 列出实际观察到的 Thread 偏移，有 b4a 时补充字段名；**Library → PP → scope → pool** 列出解析出的池槽。
 只有 b4a 时暂归 **PP → Export**，L2 确定全局池后复用同一视图。
 选择字段或槽位，可通过普通 **XREF** 返回真实使用指令；目标显示为 `THR:偏移`、`PP:偏移`

@@ -157,6 +157,11 @@ slot using the same evidence checks as the decompiler. Mutable slots, ambiguous
 origins and unsupported characters retain their original loads. **Class Layout**
 in Dart Records selects the decoded Class structure in Ghidra's Data Types tree.
 
+Validated L2/L3 payloads reconcile untouched L1 function splits; user/imported
+names, prototypes, local variables and modified bodies remain protected. Changed
+bodies discard stale value-use facts; run **Dart Value Uses** again on those
+functions.
+
 **Library → THR** lists observed Thread offsets, enriched with field names from b4a when available. **Library → PP → scope → pool**
 lists decoded pool slots; b4a-only imports use **PP → Export** until L2 binds the global
 pool. Selecting a field/slot shows its actual instruction uses in ordinary **XREFs**.

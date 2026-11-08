@@ -84,6 +84,17 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     return json == null ? List.of() : List.of(JSON.fromJson(json, ObjectUse[].class));
   }
 
+  /** A stronger boundary invalidates prior SSA, not just its displayed count.
+   * Revoke only our unchanged names, types and references while the old function
+   * still exists. The next explicit Value Uses run recovers ABI and facts anew.
+   */
+  public static void invalidate(Program program, Function function) {
+    DartTypeContracts.restore(function);
+    clear(program, function);
+    var objects = program.getUsrPropertyManager().getStringPropertyMap(OBJECT_USES);
+    if (objects != null) objects.remove(function.getEntryPoint());
+  }
+
   private record Link(String from, String to, String kind) {}
   private record Named(long symbol, String name, long type, long hash, int firstUse, String storage) {}
   private record Facts(List<Use> uses, List<Link> links, List<Named> names) {

@@ -235,8 +235,13 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
 
       Address entry = base.add(unit.primaryEntry());
       Function existing = program.getFunctionManager().getFunctionAt(entry);
+      AddressSet expected = instructionBody(program, base, unit);
+      AddressSet payload = new AddressSet(base.add(unit.start()), base.add(unit.end() - 1));
+      if (expected.contains(entry) && reconcileL1(program, entry, expected, payload, monitor)) {
+        stats.functionsReconciled++;
+        existing = program.getFunctionManager().getFunctionAt(entry);
+      }
       if (existing != null) {
-        AddressSet payload = new AddressSet(base.add(unit.start()), base.add(unit.end() - 1));
         if (payload.contains(existing.getBody())) {
           // ELF debug symbols can create a one-byte placeholder, shorter than
           // one ARM64 instruction. It is not an analyzed function body. Keep
@@ -257,6 +262,13 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
               } catch (ghidra.program.database.function.OverlappingFunctionException e) {
                 // Another function owner always wins over an inferred extent.
               }
+            }
+          }
+          if (!expected.hasSameAddresses(existing.getBody())) {
+            stats.functionsPreserved++;
+            if (stats.functionsPreserved <= 5) {
+              log.appendMsg("Dart boundaries", "Preserved noncanonical body at " + entry
+                  + ": owners did not match untouched L1 output; review before changing it.");
             }
           }
           stats.functionsExisting++;
@@ -290,7 +302,65 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
       monitor.increment();
     }
     shortenEntryLabels(program, monitor);
+    if (stats.functionsReconciled > 0) {
+      log.appendMsg("Dart boundaries", "Reconciled " + stats.functionsReconciled
+          + " untouched L1 payloads; user/imported or modified owners were preserved.");
+    }
+    if (stats.functionsPreserved > 0) {
+      log.appendMsg("Dart boundaries", "Preserved " + stats.functionsPreserved
+          + " existing bodies differing from decoded payloads; no forced replacement was made.");
+    }
     return stats;
+  }
+
+  /** A validated payload supersedes machine-only splits, not user/imported work.
+   * Check every owner before changing any, and roll back the whole payload if the
+   * native function manager refuses the replacement. Alternate entry labels and
+   * instruction references remain at their original addresses.
+   */
+  private static boolean reconcileL1(Program program, Address entry, AddressSet body,
+      AddressSet payload, TaskMonitor monitor) throws CancelledException {
+    var owners = new java.util.ArrayList<Function>();
+    var overlapping = program.getFunctionManager().getFunctionsOverlapping(payload);
+    while (overlapping.hasNext()) {
+      monitor.checkCancelled();
+      var function = overlapping.next();
+      if (!payload.contains(function.getBody())
+          || !DartFunctionAnalyzer.ownsUnmodifiedBody(program, function)) return false;
+      owners.add(function);
+    }
+    if (owners.isEmpty() || owners.size() == 1
+        && owners.get(0).getEntryPoint().equals(entry)
+        && owners.get(0).getBody().hasSameAddresses(body)) return false;
+    monitor.checkCancelled();
+    int transaction = program.startTransaction("Reconcile owned Dart L1 payload");
+    boolean committed = false;
+    try {
+      var manager = program.getFunctionManager();
+      var oldEntries = owners.stream().map(Function::getEntryPoint).toList();
+      var primary = manager.getFunctionAt(entry);
+      for (var function : owners) {
+        ghidart.analysis.DartValueAnalyzer.invalidate(program, function);
+        if (!function.getEntryPoint().equals(entry)) manager.removeFunction(function.getEntryPoint());
+      }
+      if (primary == null) {
+        primary = manager.createFunction(null, entry, body, SourceType.ANALYSIS);
+      } else {
+        primary.setBody(body);
+      }
+      // L1 must not reclaim a body now owned by stronger payload evidence.
+      var generated = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L1.functions");
+      for (var oldEntry : oldEntries) generated.remove(oldEntry);
+      committed = true;
+      return true;
+    } catch (ghidra.program.database.function.OverlappingFunctionException
+        | InvalidInputException e) {
+      // A nested transaction has no independent savepoint in ProgramDB. Abort
+      // publication rather than continuing after a partly applied replacement.
+      throw new IllegalStateException("Cannot reconcile Dart payload at " + entry, e);
+    } finally {
+      program.endTransaction(transaction, committed);
+    }
   }
 
   private static AddressSet instructionBody(
@@ -361,6 +431,8 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
   public static final class DiscoveryStats {
     int functionsCreated;
     int functionsExisting;
+    int functionsReconciled;
+    int functionsPreserved;
     int entryLabelsCreated;
     int functionsSkipped;
 

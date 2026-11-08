@@ -7,6 +7,8 @@
  * bounded codegen recognizers, not assumptions about a Thread field number.
  * An ABI contract never creates a destination address for an indirect call.
  * Snapshot hashes, feature strings, image headers and SDK layouts are unused.
+ * L2 callers may supply independently decoded shared-helper roles; both paths
+ * use the same ABI models and ownership checks. The machine path reads no L2 facts.
  */
 package ghidart.analysis;
 
@@ -29,8 +31,7 @@ import java.util.List;
 final class DartThreadCalls {
   private DartThreadCalls() {}
 
-  private record
-      Contract(String name, List<String> inputs, boolean result, boolean array, int savedFpu) {}
+  record Contract(String name, List<String> inputs, boolean result, boolean array, int savedFpu) {}
   private record Save(List<Register> registers, int bytes) {}
 
   // AddAllNonReservedRegisters in the ARM64 SDK. Roles, not Thread offsets.
@@ -39,6 +40,12 @@ final class DartThreadCalls {
 
   static int recoverContracts(Program program, List<Function> callers, TaskMonitor monitor,
       MessageLog log) throws CancelledException {
+    return recoverContracts(program, callers, monitor, log, java.util.Map.of());
+  }
+
+  /** Reuse the same contracts for independently validated L2 SDK roles. */
+  static int recoverContracts(Program program, List<Function> callers, TaskMonitor monitor,
+      MessageLog log, java.util.Map<Address, Contract> provedRoles) throws CancelledException {
     var properties = program.getUsrPropertyManager();
     var generated = properties.getStringPropertyMap("ghidart.L1.helperCalls");
     if (generated == null) {
@@ -49,7 +56,7 @@ final class DartThreadCalls {
       }
     }
     int recovered = 0;
-    var targets = new java.util.HashMap<Address, Contract>();
+    var targets = new java.util.HashMap<Address, Contract>(provedRoles);
     for (Function caller : callers) {
       // Body edits and instruction removal can hide old call sites from the
       // instruction iterator. Inspect our namespace facts before visiting code.
@@ -171,8 +178,8 @@ final class DartThreadCalls {
   /** Recognized guards, barriers and Mint helpers can relocate an object during
    * GC, but do not replace the caller's spilled object with another class.
    * This is a type-preservation fact, not a claim that its pointer bits or heap
-   * fields stay unchanged. Only our unchanged, machine-proved call contracts
-   * qualify; arbitrary calls and user-edited overrides do not.
+   * fields stay unchanged. Only our unchanged contracts from machine evidence
+   * or validated L2 roles qualify; arbitrary calls and edited overrides do not.
    */
   static boolean preservesSpilledObjectType(Program program, Function caller, Address site) {
     var owned = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L1.helperCalls");

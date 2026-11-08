@@ -134,8 +134,10 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
     }
     log.appendMsg(getName(), incomplete + " incomplete CFGs left without inferred signatures.");
     if (bottomUp.isEmpty() && !unreadableTypes.isEmpty()) return true;
-    // Machine-only helper contracts: no snapshot identity or Thread layout.
-    int helpers = DartThreadCalls.recoverContracts(program, bottomUp, monitor, log);
+    // L1 derives helper contracts from code. L2 can independently supply SDK
+    // root roles; both use the same physical models and ownership checks.
+    var helperRoles = DartObjectUses.helperContracts(program, bottomUp, monitor);
+    int helpers = DartThreadCalls.recoverContracts(program, bottomUp, monitor, log, helperRoles);
     log.appendMsg(getName(), helpers + " SDK helper call contracts recovered.");
     int runtimeCalls = 0;
     for (Function function : bottomUp) {
@@ -183,16 +185,23 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
     // Native liveness recovery can discard CALL results and invariant NULL_REG
     // values. Supplement only locally proved managed return contracts, after
     // native parameter recovery. This supplement changes only return metadata.
+    // Native analysis can reopen automatic allocation prototypes. Restore
+    // proved physical results before callers query them, not after forwarding.
+    int allocations = DartObjectUses.allocationReturns(program, bottomUp, monitor);
     int recovered = 0;
+    monitor.initialize(bottomUp.size(), "Checking managed return contracts");
     try (var contracts = new ReturnContracts(program, monitor)) {
       for (Function function : bottomUp) {
         monitor.checkCancelled();
         Address entry = function.getEntryPoint();
+        monitor.increment();
+        monitor.setMessage(getName() + ": checking returns at " + entry);
         if (!eligible(function)) {
           continue;
         }
         try {
           Parameter result = managedResult(program, function, contracts, monitor);
+          if (result == null) result = contracts.forwardedResult(function);
           if (result != null) {
             function.setReturn(result.getDataType(), result.getVariableStorage(), SourceType.ANALYSIS);
             recovered++;
@@ -202,7 +211,6 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
         }
       }
     }
-    int allocations = DartObjectUses.allocationReturns(program, bottomUp, monitor);
     if (allocations != 0) {
       log.appendMsg(getName(), allocations + " L2-proved allocation returns restored to x0.");
     }
@@ -470,6 +478,107 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
         bodies.put(entry, body);
       }
       return body;
+    }
+
+    /** Let native SSA prove call results forwarded through spills and merges.
+     * The candidate return is temporary: a live x0 alone is not evidence. Every
+     * native RETURN must trace to a known x0 call result or its caller-local
+     * spill. This establishes the result bank/width, not unchanged pointer bits
+     * or a Class across arbitrary calls. Restored inputs and raw loads reject.
+     */
+    Parameter forwardedResult(Function function) throws CancelledException, InvalidInputException {
+      var storage = new VariableStorage(program, program.getRegister("x0"));
+      boolean known = false;
+      for (var callee : function.getCalledFunctions(monitor)) {
+        known |= !callee.isExternal() && !callee.hasNoReturn()
+            && callee.getReturn().getVariableStorage().equals(storage);
+      }
+      if (!known || function.isThunk()) return null;
+      var type = function.getReturnType();
+      var oldStorage = function.getReturn().getVariableStorage();
+      var source = function.getReturn().getSource();
+      var signatureSource = function.getSignatureSource();
+      try {
+        // A concrete word locks the probe output; undefined8 is deliberately
+        // unlocked by the native engine and can disappear before SSA exists.
+        function.setReturn(ghidra.program.model.data.UnsignedLongLongDataType.dataType,
+            storage, SourceType.ANALYSIS);
+        if (!opened) opened = decompiler.openProgram(program);
+        if (!opened) return null;
+        decompiler.flushCache();
+        var probe = decompiler.decompileFunction(function, 20, monitor);
+        monitor.checkCancelled();
+        if (!probe.decompileCompleted() || probe.getHighFunction() == null) return null;
+        int returns = 0;
+        var high = probe.getHighFunction();
+        for (var it = high.getPcodeOps(); it.hasNext();) {
+          var op = it.next();
+          if (op.getOpcode() != PcodeOp.RETURN) continue;
+          returns++;
+          if (op.getNumInputs() != 2 || !forwarded(op.getInput(1), high,
+              java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>()),
+              new int[] {4096})) return null;
+        }
+        return returns == 0 ? null : new ParameterImpl(Parameter.RETURN_NAME,
+            Undefined8DataType.dataType, storage, program);
+      } finally {
+        function.setReturn(type, oldStorage, source);
+        function.setSignatureSource(signatureSource);
+        decompiler.flushCache();
+      }
+    }
+
+    private boolean forwarded(Varnode value, ghidra.program.model.pcode.HighFunction high,
+        java.util.Set<Varnode> path, int[] budget)
+        throws CancelledException, InvalidInputException {
+      monitor.checkCancelled();
+      if (value == null || value.getSize() != 8 || --budget[0] < 0 || !path.add(value)) return false;
+      try {
+        var op = value.getDef();
+        if (op == null) return false;
+        if (op.getOpcode() == PcodeOp.COPY || op.getOpcode() == PcodeOp.CAST) {
+          return forwarded(op.getInput(0), high, path, budget);
+        }
+        if (op.getOpcode() == PcodeOp.MULTIEQUAL) {
+          for (var input : op.getInputs()) if (!forwarded(input, high, path, budget)) return false;
+          return op.getNumInputs() != 0;
+        }
+        if (op.getOpcode() == PcodeOp.INDIRECT && value.getAddress().isStackAddress()
+            && value.getOffset() < 0 && (value.getOffset() & 7) == 0 && op.getInput(1).isConstant()) {
+          var effect = high.getOpRef((int) op.getInput(1).getOffset());
+          // A call may change a spilled reference (including GC relocation).
+          // Its eight-byte result slot is still explicitly reloaded into x0.
+          // Follow its initialization only for ABI width; object provenance
+          // deliberately retains the stricter helper-only rule elsewhere.
+          if (effect != null && (effect.getOpcode() == PcodeOp.CALL
+              || effect.getOpcode() == PcodeOp.CALLIND)) {
+            return forwarded(op.getInput(0), high, path, budget);
+          }
+        }
+        if (op.getOpcode() != PcodeOp.CALL) return false;
+        var caller = high.getFunction();
+        var instruction = program.getListing().getInstructionAt(op.getSeqnum().getTarget());
+        if (instruction == null) return false;
+        var override = override(caller, instruction);
+        if (override != null) {
+          var model = program.getCompilerSpec().getCallingConvention(override.getCallingConventionName());
+          return model != null && override.getReturnType().getLength() == 8
+              && model.getStorageLocations(program,
+                  new ghidra.program.model.data.DataType[] {override.getReturnType()}, true, false)[0]
+                  .equals(new VariableStorage(program, program.getRegister("x0")));
+        }
+        var callee = program.getFunctionManager().getFunctionAt(op.getInput(0).getAddress());
+        if (callee == null || callee.isExternal() || callee.hasNoReturn()
+            || callee.getEntryPoint().equals(caller.getEntryPoint())) return false;
+        // Consult independently saved storage only. Decompiling an unresolved
+        // recursive callee here could learn from our temporary candidate and
+        // turn the probe into its own evidence.
+        var returned = callee.getReturn();
+        return returned.getDataType().getLength() == 8
+            && returned.getVariableStorage().equals(new VariableStorage(program, program.getRegister("x0")));
+      } finally {
+        path.remove(value);
+      }
     }
 
     Parameter result(Function function) throws CancelledException, InvalidInputException {

@@ -255,6 +255,57 @@ final class DartObjectUses {
     return index;
   }
 
+  /** L2 root identities can supplement helper ABI when an older SDK's body
+   * falls outside L1's bounded codegen recognizers. No names from the symbol
+   * tree or Thread offsets participate, and L1 needs none of these facts.
+   */
+  static Map<Address, DartThreadCalls.Contract> helperContracts(Program program,
+      List<Function> callers, TaskMonitor monitor) throws CancelledException {
+    var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
+    var result = new HashMap<Address, DartThreadCalls.Contract>();
+    if (facts == null) return result;
+    var targets = new HashSet<Address>();
+    for (var caller : callers) {
+      for (var callee : caller.getCalledFunctions(monitor)) {
+        if (!callee.isExternal()) targets.add(callee.getEntryPoint());
+      }
+    }
+    for (var target : targets) {
+      monitor.checkCancelled();
+      DartThreadCalls.Contract agreed = null;
+      boolean conflict = false;
+      for (var code : ghidart.snapshot.DartObjectGraph.to(program, target)) {
+        String raw = facts.getString(code.getFromAddress());
+        if (raw == null || !raw.contains("\"kind\":\"Code\"")) continue;
+        for (var root : ghidart.snapshot.DartObjectGraph.to(program, code.getFromAddress())) {
+          raw = facts.getString(root.getFromAddress());
+          if (raw == null || !raw.contains("\"kind\":\"RootReference\"")) continue;
+          String role = JsonParser.parseString(raw).getAsJsonObject().get("name").getAsString();
+          var contract = switch (role) {
+            case "stub.StackOverflowSharedWithFPURegs",
+                "object_store.stack_overflow_stub_with_fpu_regs_stub" ->
+                    new DartThreadCalls.Contract("__dart_guard_fpu", List.of(), false, false, 32);
+            case "stub.StackOverflowSharedWithoutFPURegs",
+                "object_store.stack_overflow_stub_without_fpu_regs_stub" ->
+                    new DartThreadCalls.Contract("__dart_guard", List.of(), false, false, 0);
+            case "stub.AllocateMintSharedWithFPURegs",
+                "object_store.allocate_mint_with_fpu_regs_stub" ->
+                    new DartThreadCalls.Contract("__dart_mint_fpu", List.of(), true, false, 32);
+            case "stub.AllocateMintSharedWithoutFPURegs",
+                "object_store.allocate_mint_without_fpu_regs_stub" ->
+                    new DartThreadCalls.Contract("__dart_mint", List.of(), true, false, 0);
+            default -> null;
+          };
+          if (contract == null) continue;
+          if (agreed != null && !agreed.equals(contract)) conflict = true;
+          agreed = contract;
+        }
+      }
+      if (!conflict && agreed != null) result.put(target, agreed);
+    }
+    return result;
+  }
+
   /** Restore only the SDK allocation result, not a logical Dart signature.
    * Native recovery can otherwise combine stale x0/x1 into a 16-byte return.
    * The same Class-owned Code fact used for provenance proves result x0.
@@ -281,6 +332,18 @@ final class DartObjectUses {
         Address owner = relative(ref.getFromAddress(), code.get("ownerRef").getAsInt(), code.get("refId").getAsInt());
         String declaration = facts.getString(owner);
         allocation |= declaration != null && declaration.contains("\"kind\":\"Class\"");
+        // SDK allocation helpers can have null Code.owner (and tail-call a
+        // runtime-filled THR target). A validated root role still defines their
+        // x0 result; neither a user-visible name nor a guessed THR offset does.
+        for (var root : ghidart.snapshot.DartObjectGraph.to(program, ref.getFromAddress())) {
+          String raw = facts.getString(root.getFromAddress());
+          if (raw == null || !raw.contains("\"kind\":\"RootReference\"")) continue;
+          String role = JsonParser.parseString(raw).getAsJsonObject().get("name").getAsString();
+          // AllocateArrayABI::kResultReg and the ordinary allocation ABI are R0.
+          // Shared Mint/FPU helpers have different contracts and are excluded.
+          allocation |= Set.of("stub.AllocateArray", "stub.AllocateGrowableArray",
+              "object_store.allocate_array_stub").contains(role);
+        }
       }
       if (!allocation) continue;
       try {

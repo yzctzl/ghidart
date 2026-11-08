@@ -202,6 +202,14 @@ Proved receiver and return types also enrich native prototypes without changing
 parameter counts or physical storage. Callers can then use those return types for
 field access. Reanalysis revokes unchanged generated types before ABI recovery,
 so stale local types cannot recreate a revoked conclusion; user prototypes are preserved.
+Validated SDK allocation-root roles restore the x0 result where native liveness
+would otherwise infer a missing or multiword allocation result. Decoded shared
+Mint/stack-check roles reuse the same helper models as L1; without L2, the
+machine-only path remains independent. Native SSA additionally checks results
+forwarded through spills and merges. This proves the result register and width,
+not an unchanged object identity across unknown calls; merely leaving x0 live
+does not prove a return.
+
 Stable string pool loads use Ghidra's native constant-pool operation, so literals
 appear inside pseudocode expressions, including Unicode. Their type is a managed
 `DartStringRef`, not a pointer to the file's character bytes. Patchable slots,

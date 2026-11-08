@@ -190,6 +190,15 @@ through SSA copies and unambiguous merges. Exact field accesses link to retained
 Field declarations, including inherited fields; generated locals carry class/field
 names. Whole SSA locals proved to hold one full-width tagged Class use Ghidra's
 native shifted-pointer type (`ADJ(obj)->field`); compressed values remain integers.
+Stable string pool loads use Ghidra's native constant-pool operation, so literals
+appear inside pseudocode expressions, including Unicode. Their type is a managed
+`DartStringRef`, not a pointer to the file's character bytes. Patchable slots,
+ambiguous references and missing L2 evidence retain the original LOAD. Embedded NULs
+and unpaired UTF-16 units also stay in explicit-length data and raw loads: the native
+C literal printer cannot preserve them faithfully. Machine bytes,
+Listing and debugger registers are unchanged; the interpreter marker is an identity.
+Existing databases require the normal language upgrade to version 1.2.
+
 **Dart → Show Value Uses** reports object, argument and return provenance.
 Unknown calls, ambiguous values and missing declarations stop this propagation;
 logical signatures are not substituted for the physical ABI.

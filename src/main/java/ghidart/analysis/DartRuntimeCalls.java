@@ -428,6 +428,7 @@ final class DartRuntimeCalls {
         values.keySet().removeIf(Varnode::isUnique);
         loads.keySet().removeIf(Varnode::isUnique);
         for (var op : instruction.getPcode()) {
+          if (DartPcodeInjectLibrary.isPoolIdentity(program, op)) continue;
           if (op.getOpcode() == PcodeOp.CALLOTHER) {
             return null;
           }
@@ -554,6 +555,7 @@ final class DartRuntimeCalls {
       boolean returns = false;
       for (var op : instruction.getPcode()) {
         returns |= op.getOpcode() == PcodeOp.RETURN;
+        if (DartPcodeInjectLibrary.isPoolIdentity(program, op)) continue;
         if (op.getOpcode() == PcodeOp.CALLOTHER) {
           return false;
         }

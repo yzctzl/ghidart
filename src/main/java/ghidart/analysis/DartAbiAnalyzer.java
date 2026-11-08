@@ -365,6 +365,7 @@ public final class DartAbiAnalyzer extends AbstractAnalyzer {
         }
       }
       for (PcodeOp operation : operations) {
+        if (DartPcodeInjectLibrary.isPoolIdentity(program, operation)) continue;
         if (operation.getOpcode() == PcodeOp.CALLOTHER) {
           return null;
         }

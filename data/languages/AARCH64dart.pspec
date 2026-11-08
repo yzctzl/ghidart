@@ -7,7 +7,7 @@
     <property key="useNewFunctionStackAnalysis" value="true" />
     <property key="emulateInstructionStateModifierClass" value="ghidra.program.emulation.AARCH64EmulateInstructionStateModifier" />
     <property key="pcodeInjectLibraryClass" value="ghidart.analysis.DartPcodeInjectLibrary" />
-    <property key="useropLibs" value="aarch64" />
+    <property key="useropLibs" value="aarch64,ghidart.pool" />
   </properties>
   <programcounter register="pc" />
   <context_data>

@@ -672,6 +672,7 @@ final class DartThreadCalls {
           return null;
         }
         for (var op : instruction.getPcode()) {
+          if (DartPcodeInjectLibrary.isPoolIdentity(program, op)) continue;
           if (op.getOpcode() == PcodeOp.CALLOTHER) {
             return null;
           }

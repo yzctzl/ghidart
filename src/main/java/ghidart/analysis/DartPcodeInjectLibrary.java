@@ -33,14 +33,50 @@ public final class DartPcodeInjectLibrary extends PcodeInjectLibrary {
     super(language);
   }
 
+  private DartPcodeInjectLibrary(DartPcodeInjectLibrary source) { super(source); }
+
+  @Override
+  public PcodeInjectLibrary clone() { return new DartPcodeInjectLibrary(this); }
+
   @Override
   public InjectPayload allocateInject(String source, String name, int type) {
+    if (type == InjectPayload.CALLOTHERFIXUP_TYPE && "dart_pool_value".equals(name)) {
+      return new PoolValue(source);
+    }
     if (type != InjectPayload.CALLFIXUP_TYPE || !RUNTIME_STUB.equals(name)) {
       return super.allocateInject(source, name, type);
     }
     long base = uniqueBase;
     uniqueBase += RuntimeStub.TEMPORARY_CAPACITY;
     return new RuntimeStub(source, base);
+  }
+
+  /** The decoder marker is an identity for all machine-only consumers. */
+  static boolean isPoolIdentity(Program program, PcodeOp op) {
+    return op.getOpcode() == PcodeOp.CALLOTHER && op.getNumInputs() == 2
+        && op.getOutput() != null && op.getOutput().equals(op.getInput(1))
+        && "dart_pool_value".equals(program.getLanguage().getUserDefinedOpName((int) op.getInput(0).getOffset()));
+  }
+
+  @Override
+  public ghidra.program.model.lang.ConstantPool getConstantPool(Program program) {
+    return new DartConstantPool(program);
+  }
+
+  private static final class PoolValue extends ghidra.program.model.lang.InjectPayloadCallother {
+    PoolValue(String source) { super(source); }
+
+    @Override
+    public PcodeOp[] getPcode(Program program, InjectContext context) {
+      var slot = DartConstantPool.reference(program, context.baseAddr);
+      var output = context.output.getFirst();
+      if (slot == null) return new PcodeOp[] {new PcodeOp(context.baseAddr, 0,
+          PcodeOp.COPY, new Varnode[] {context.inputlist.getFirst()}, output)};
+      var constants = program.getAddressFactory().getConstantSpace();
+      return new PcodeOp[] {new PcodeOp(context.baseAddr, 0, PcodeOp.CPOOLREF,
+          new Varnode[] {new Varnode(constants.getAddress(0), 8),
+              new Varnode(constants.getAddress(slot.getOffset()), 8)}, output)};
+    }
   }
 
   private static final class RuntimeStub extends InjectPayloadCallfixup {

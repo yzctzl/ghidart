@@ -7,7 +7,7 @@
               endian="little"
               size="64"
               variant="dart"
-              version="1.1"
+              version="1.2"
               slafile="AARCH64dart.sla"
               processorspec="AARCH64dart.pspec"
               manualindexfile="../manuals/AARCH64.idx"

@@ -23,3 +23,33 @@ is ImmS_ImmR_TestSet=1 & b_2531=0x2a & o1=0 & Addr19 & o0=0 & br_cond_op=14
 {
  goto Addr19;
 }
+
+# The intrinsic is an identity outside native decompilation. The original LOAD
+# remains explicit; the Java fixup supplies CPOOLREF only for a validated stable
+# String slot at this exact instruction. Unknown/patchable pools keep the LOAD.
+define pcodeop dart_pool_value;
+:ldr Rt_GPR64, addrUIMM
+is Rt!=0x1f & ImmS_ImmR_TestSet=1 & size.ldstr=3 & b_2729=7 & v=0 & b_2425=1 & b_23=0 & b_2222=1
+ & addrUIMM & Rn_GPR64xsp & Rt_GPR64
+{
+ Rt_GPR64 = *addrUIMM;
+ Rt_GPR64 = dart_pool_value(Rt_GPR64);
+}
+
+# Reuse the official addressing subtables, including base updates. Validated
+# PP provenance can involve a scratch register and large-offset construction.
+:ldr Rt_GPR64, addrIndexed
+is Rt!=0x1f & ImmS_ImmR_TestSet=1 & size.ldstr=3 & b_2729=7 & v=0 & b_2425=0 & b_23=0
+ & b_2222=1 & b_2121=0 & b_1010=1 & addrIndexed & Rt_GPR64
+{
+ Rt_GPR64 = *addrIndexed;
+ Rt_GPR64 = dart_pool_value(Rt_GPR64);
+}
+
+:ldr Rt_GPR64, addrIndexed
+is Rt!=0x1f & ImmS_ImmR_TestSet=1 & size.ldstr=3 & b_2729=7 & v=0 & b_2425=0 & b_23=0
+ & b_2222=1 & b_2121=1 & b_1011=2 & addrIndexed & Rt_GPR64
+{
+ Rt_GPR64 = *addrIndexed;
+ Rt_GPR64 = dart_pool_value(Rt_GPR64);
+}

@@ -282,4 +282,10 @@
   <callfixup name="dart_runtime_stub">
     <pcode dynamic="true" />
   </callfixup>
+  <callotherfixup targetop="dart_pool_value">
+    <pcode dynamic="true">
+      <input name="loaded" size="8" />
+      <output name="value" size="8" />
+    </pcode>
+  </callotherfixup>
 </compiler_spec>

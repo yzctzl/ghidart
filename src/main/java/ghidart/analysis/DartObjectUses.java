@@ -79,7 +79,7 @@ final class DartObjectUses {
   private final Set<Address> immutableInstances = new HashSet<>();
   private final Map<Address, InstanceFact> instanceFacts = new HashMap<>();
   private final Map<Address, Address> strings = new HashMap<>();
-  private record Receiver(Address owner, int parameters, boolean stackOnly) {}
+  private record Receiver(Address owner, int parameters, boolean stackOnly, int optional) {}
   private final Map<Address, Receiver> receivers = new HashMap<>();
   private final Set<Address> conflictingReceivers = new HashSet<>();
 
@@ -232,11 +232,11 @@ final class DartObjectUses {
           : JsonParser.parseString(signatureJson).getAsJsonObject().getAsJsonObject("signature");
       String role = info.has("role") ? info.get("role").getAsString() : "";
       if (info.get("hasThis").getAsBoolean() && index.classes.containsKey(owner)
-          && signature != null && signature.get("hasImplicit").getAsBoolean()
-          && signature.get("numOptional").getAsInt() == 0 && !role.isEmpty()) {
+          && signature != null && signature.get("hasImplicit").getAsBoolean() && !role.isEmpty()) {
         boolean stackOnly = Set.of("MethodExtractor", "NoSuchMethodDispatcher",
             "InvokeFieldDispatcher", "DynamicInvocationForwarder", "FieldInitializer").contains(role);
-        receiver = new Receiver(owner, signature.get("numFixed").getAsInt() + 1, stackOnly);
+        receiver = new Receiver(owner, signature.get("numFixed").getAsInt() + 1, stackOnly,
+            signature.get("numOptional").getAsInt());
       }
       for (var ref : ghidart.snapshot.DartObjectGraph.from(program, identity)) {
         Address target = ref.getToAddress();
@@ -368,7 +368,7 @@ final class DartObjectUses {
    * ARM64 Dart register arguments start at x1, not the result register x0.
    * Stack-only entries reverse logical arguments; this is the highest slot.
    * The independent x4 arguments descriptor is not a positional slot. Missing
-   * inputs, optional copies and user/imported prototypes remain unknown.
+   * inputs, optional stack copies and user/imported prototypes remain unknown.
    * The owner proves an implementation layout, not exact runtime subtype.
    */
   private Address receiverStorage(Function function, Receiver receiver) {
@@ -376,31 +376,52 @@ final class DartObjectUses {
         || function.getSignatureSource().isHigherPriorityThan(SourceType.ANALYSIS)) return null;
     Address register = null;
     int positional = 0;
-    var stack = new HashSet<Long>();
+    var stack = new HashMap<Long, Integer>();
     for (var parameter : function.getParameters()) {
       if (parameter.getSource().isHigherPriorityThan(SourceType.ANALYSIS)) return null;
       var storage = parameter.getVariableStorage().getVarnodes();
-      if (storage.length != 1 || storage[0].getSize() != 8) return null;
+      if (storage.length != 1 || storage[0].getSize() != 8 && storage[0].getSize() != 4) return null;
       var node = storage[0];
       // ARGS_DESC_REG (x4) is a separate SDK calling-convention input,
       // not a Dart positional argument. Keep it in the physical prototype,
       // but do not let its liveness invalidate an otherwise exact receiver.
-      if (node.isRegister() && node.getAddress().equals(program.getRegister("x4").getAddress())) continue;
+      if (node.isRegister() && node.getAddress().equals(program.getRegister("x4").getAddress())) {
+        if (node.getSize() != 8) return null;
+        continue;
+      }
       positional++;
       if (node.isRegister()) {
-        var reg = program.getRegister(node.getAddress(), node.getSize());
+        // Native recovery can expose only the used 32 bits of another input.
+        // It still occupies one ARM64 argument slot. The receiver itself must
+        // remain a complete tagged pointer; never promote w1 to an object.
+        var reg = program.getRegister(node.getAddress(), 8);
         if (reg == null || !Set.of("x1", "x2", "x3", "x5", "x6", "x7",
             "d0", "d1", "d2", "d3", "d4", "d5").contains(reg.getName())) return null;
-        if (reg.equals(program.getRegister("x1"))) register = node.getAddress();
+        if (reg.equals(program.getRegister("x1"))) {
+          if (node.getSize() != 8) return null;
+          register = node.getAddress();
+        }
       } else if (node.getAddress().isStackAddress() && node.getOffset() >= 0) {
-        stack.add(node.getOffset());
+        stack.put(node.getOffset(), node.getSize());
       } else return null;
+    }
+    if (receiver.optional() > 0) {
+      // SDK Function::MaxNumberOfParametersInRegisters assigns fixed arguments
+      // first, so a register-CC receiver is still x1 with optional parameters.
+      // Stack-only optional entries instead move by the runtime argument count;
+      // a recovered highest stack slot cannot prove their receiver location.
+      return !receiver.stackOnly() && register != null
+              && positional >= receiver.parameters()
+              && positional <= receiver.parameters() + receiver.optional()
+          ? register : null;
     }
     if (positional != receiver.parameters()) return null;
     if (!receiver.stackOnly() && register != null) return register;
     if (stack.size() != receiver.parameters()) return null;
-    for (int i = 0; i < receiver.parameters(); i++) if (!stack.contains(i * 8L)) return null;
-    return program.getAddressFactory().getStackSpace().getAddress((receiver.parameters() - 1) * 8L);
+    for (int i = 0; i < receiver.parameters(); i++) if (!stack.containsKey(i * 8L)) return null;
+    long receiverSlot = (receiver.parameters() - 1) * 8L;
+    return stack.get(receiverSlot) == 8
+        ? program.getAddressFactory().getStackSpace().getAddress(receiverSlot) : null;
   }
 
   /** COPY-only leaf summary, expressed as a physical formal-parameter index.

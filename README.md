@@ -216,7 +216,10 @@ native shifted-pointer type (`ADJ(obj)->field`); compressed values remain intege
 This also applies to stable pool instances and merged locals whose alternatives
 all prove the same Class. Different instances do not require different types;
 an unknown or patchable alternative prevents whole-local typing.
-The receiver matcher separates the x4 arguments descriptor from positional inputs.
+The receiver matcher separates x4 from positional inputs and accepts a proved x1
+receiver for optional-argument methods. Other inputs may use only 32 bits; the
+receiver must remain a complete 64-bit tagged pointer. Dynamic optional stack
+locations remain unknown.
 Proved entry receiver and return types enrich native prototypes without changing
 parameter counts or physical storage. Callers can then use those return types for
 field access. Reanalysis revokes unchanged generated types before ABI recovery,

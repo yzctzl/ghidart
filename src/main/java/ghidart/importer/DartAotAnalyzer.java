@@ -57,7 +57,7 @@ public final class DartAotAnalyzer extends AbstractAnalyzer {
 
   @Override
   public boolean getDefaultEnablement(Program program) {
-    return true;
+    return false;
   }
 
   @Override

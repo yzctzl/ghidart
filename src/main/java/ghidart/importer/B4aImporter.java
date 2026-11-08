@@ -28,6 +28,7 @@ import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.SourceType;
 import ghidra.program.model.util.StringPropertyMap;
 import ghidra.util.task.TaskMonitor;
+import ghidra.util.exception.CancelledException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,7 +43,7 @@ import java.util.Set;
 public final class B4aImporter {
   public static final String FACTS = "ghidart.b4a";
   public static final String ANNOTATIONS = "ghidart.b4a.listing";
-  private static final int PRESENTATION = 3;
+  private static final int PRESENTATION = 5;
   private static final String GENERATION = "b4aGeneration";
   private final Program program;
   private final TaskMonitor monitor;
@@ -98,11 +99,13 @@ public final class B4aImporter {
     if (!identity.equals(hash(path, monitor))) throw new IllegalArgumentException("b4a file changed during validation");
     int transaction = program.startTransaction("Import b4a semantics");
     boolean committed = false;
-    try {
+    try (var graph = ghidart.snapshot.DartObjectGraph.batch(program, monitor)) {
       if (!previous.isEmpty()) importer.removeOldPresentation();
       DartAotAnalyzer.applyBoundaries(program, index.codeUnits(), monitor, log);
       monitor.setIndeterminate(false);
       monitor.initialize(importer.records, "Publishing b4a facts");
+      ghidart.snapshot.DartObjectGraph.migrate(program, monitor);
+      ghidart.listing.DartNamespaces.migrate(program, monitor);
       importer.initialize();
       monitor.setMessage("Publishing b4a classes and layouts");
       importer.publishClasses();
@@ -113,10 +116,12 @@ public final class B4aImporter {
       importer.scan(path, true);
       if (!identity.equals(hash(path, monitor))) throw new IllegalArgumentException("b4a file changed during import");
       importer.publishFallbackNames();
+      ghidart.listing.DartSlotViews.pruneExport(program);
       importer.pruneOldNamespaces();
       options.setInt("b4aPresentation", PRESENTATION);
       options.setString(GENERATION, identity);
       options.setString("b4aPath", path.toAbsolutePath().normalize().toString());
+      graph.flush();
       committed = true;
     } finally {
       program.endTransaction(transaction, committed);
@@ -380,7 +385,7 @@ public final class B4aImporter {
     next = program.getAddressFactory().getAddressSpace("OTHER").getAddress(0x40_0000_0000L);
     facts = program.getUsrPropertyManager().createStringPropertyMap(FACTS);
     annotations = program.getUsrPropertyManager().createStringPropertyMap(ANNOTATIONS);
-    root = namespace(program.getGlobalNamespace(), "Library", false);
+    root = program.getGlobalNamespace();
   }
 
   private void record(JsonElement value) throws Exception {
@@ -550,6 +555,9 @@ public final class B4aImporter {
     var type = new StructureDataType(new CategoryPath("/Dart/B4a/Structures"), clean(name), 0);
     var sorted = new java.util.ArrayList<JsonElement>(members.asList());
     sorted.sort(java.util.Comparator.comparingInt(value -> value.getAsJsonArray().get(0).getAsInt()));
+    long extent = sorted.isEmpty() ? 0 : sorted.getLast().getAsJsonArray().get(0).getAsLong() + 8;
+    Address model = ghidart.listing.DartSlotViews.exportedStructure(program, name, extent, monitor);
+    Namespace modelOwner = model == null ? null : ghidart.listing.DartSlotViews.exportedOwner(program, name);
     for (var value : sorted) {
       monitor.checkCancelled();
       JsonArray member = value.getAsJsonArray();
@@ -558,6 +566,15 @@ public final class B4aImporter {
       String label = member.get(1).getAsString();
       if (!hasContent(member)) continue;
       slots.put(name + ":" + offset, member);
+      if (model != null) {
+        Address target = model.add(offset);
+        ghidart.listing.DartSlotViews.slot(program, target, modelOwner, clean(label) + "_" + Integer.toHexString(offset),
+            slotText(member), SourceType.IMPORTED);
+        JsonArray retained = new JsonArray();
+        retained.add(name);
+        retained.add(member);
+        appendFact(target, "structureMembers", retained);
+      }
       // These are machine-word structures, never compressed object-slot arrays.
       // Unpacked append is linear. growStructure/replaceAtOffset repack all
       // previous members and become quadratic on a real 90,000-slot pool.
@@ -589,13 +606,14 @@ public final class B4aImporter {
     for (Object object : instruction.getOpObjects(operand)) {
       if (object instanceof Scalar value) { scalar = value; count++; }
     }
-    long offset = count == 1 ? scalar.getSignedValue() + delta : -1;
+    long offset = count == 1 ? scalar.getSignedValue() + delta : count == 0 ? delta : -1;
     JsonArray member = slots.get(structure + ":" + offset);
     if (member == null) {
       unresolvedOperands++;
       return;
     }
     saveAnnotation(address, structure + " + 0x" + Long.toHexString(offset) + ": " + slotText(member));
+    publishModelAccess(program, address, row);
     if (!structure.equals("DartObjectPool")) return;
     JsonArray description = new JsonArray();
     description.add(offset);
@@ -605,7 +623,7 @@ public final class B4aImporter {
     // and character references; an exported description is not a new destination.
     var l2 = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
     if (l2 == null) return;
-    for (var reference : program.getReferenceManager().getReferencesFrom(address)) {
+    for (var reference : ghidart.snapshot.DartObjectGraph.from(program, address)) {
       if (reference.getReferenceType() != RefType.READ && reference.getReferenceType() != RefType.WRITE) continue;
       String json = l2.getString(reference.getToAddress());
       if (json == null) continue;
@@ -616,6 +634,74 @@ public final class B4aImporter {
         references++;
       }
     }
+  }
+
+  /** Replay after L2 disassembles additional entries; keep retained export rows useful. */
+  public static int restoreModelReferences(Program program, TaskMonitor monitor) throws CancelledException {
+    var facts = program.getUsrPropertyManager().getStringPropertyMap(FACTS);
+    if (facts == null) return 0;
+    int linked = 0;
+    monitor.setMessage("Linking exported THR/PP field accesses");
+    var addresses = facts.getPropertyIterator();
+    while (addresses.hasNext()) {
+      monitor.checkCancelled();
+      Address address = addresses.next();
+      String stored = facts.getString(address);
+      if (stored == null || !stored.contains("\"operands\"")) continue;
+      var record = JsonParser.parseString(stored).getAsJsonObject();
+      if (!record.has("operands")) continue;
+      for (var value : record.getAsJsonArray("operands")) {
+        linked += publishModelAccess(program, address, value.getAsJsonArray());
+      }
+    }
+    return linked;
+  }
+
+  private static int publishModelAccess(Program program, Address address, JsonArray row) {
+    String structure = row.get(2).getAsString();
+    if (!structure.equals("DartThread") && !structure.equals("DartObjectPool")) return 0;
+    int operand = row.get(1).getAsInt();
+    var instruction = program.getListing().getInstructionAt(address);
+    if (instruction == null || operand >= instruction.getNumOperands()) return 0;
+    Scalar scalar = null;
+    int scalars = 0, registers = 0;
+    boolean matchesBase = false;
+    var base = program.getRegister(structure.equals("DartThread") ? "x26" : "x27");
+    for (Object object : instruction.getOpObjects(operand)) {
+      if (object instanceof Scalar value) { scalar = value; scalars++; }
+      if (object instanceof ghidra.program.model.lang.Register register) {
+        registers++;
+        matchesBase |= register.equals(base);
+      }
+    }
+    if (scalars > 1 || registers != 1 || !matchesBase) return 0;
+    long offset = (scalar == null ? 0 : scalar.getSignedValue()) + row.get(3).getAsLong();
+    // Unknown register-based addresses often have only a generic DATA operand
+    // type in Ghidra. The decoded LOAD/STORE effects establish read/write kind.
+    boolean read = false, write = false;
+    for (var op : instruction.getPcode()) {
+      read |= op.getOpcode() == ghidra.program.model.pcode.PcodeOp.LOAD;
+      write |= op.getOpcode() == ghidra.program.model.pcode.PcodeOp.STORE;
+    }
+    if (!read && !write) return 0;
+    var type = read && write ? RefType.READ_WRITE : read ? RefType.READ : RefType.WRITE;
+    String modelName = structure.equals("DartThread") ? "THR" : "PP";
+    var block = program.getMemory().getBlock("DartSlots_" + modelName);
+    if (block == null || offset < 0 || offset >= block.getSize()) return 0;
+    Address target = block.getStart().add(offset);
+    if (program.getListing().getDataAt(target) == null) return 0;
+    if (structure.equals("DartObjectPool")
+        && program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1") != null) {
+      // Once L2 is available, require its pool provenance. Offset equality alone
+      // cannot select the active pool when a function changes PP.
+      boolean proved = ghidart.snapshot.DartObjectGraph.from(program, address).stream()
+          .anyMatch(edge -> (edge.getReferenceType().isRead() || edge.getReferenceType().isWrite())
+              && target.equals(ghidart.listing.DartSlotViews.forRecord(program, edge.getToAddress())));
+      if (!proved) return 0;
+    }
+    if (program.getReferenceManager().getReference(address, target, -1) != null) return 0;
+    program.getReferenceManager().addMemoryReference(address, target, type, SourceType.ANALYSIS, -1);
+    return 1;
   }
 
   /** Attach L3 evidence to an L2-proved, pool-scoped slot. Never invent a pointer.
@@ -687,7 +773,8 @@ public final class B4aImporter {
 
   private boolean isOurs(Namespace owner) {
     while (!owner.isGlobal()) {
-      if ((owner.getName().equals("B4a") || owner.getName().equals("Library"))
+      if ((owner.getName().equals("B4a") || owner.getName().equals("Library")
+          || java.util.Set.of("Packages", "SDK", "App", "Runtime", "Unresolved").contains(owner.getName()))
           && owner.getParentNamespace().isGlobal()) return true;
       owner = owner.getParentNamespace();
     }

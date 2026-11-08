@@ -60,7 +60,9 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
      L2 stays enabled to decode objects, strings and pool references without
      repeating L3 boundaries or replacing its names. Rejected imports leave L2
      to provide boundaries as well. **Dart ABI** remains independent.
-     **Dart AOT Code Boundaries** remains available for boundaries alone.
+     **Dart AOT Code Boundaries** is disabled by default for every snapshot format;
+     run it manually from One Shot for boundaries alone. It does not publish THR/PP
+     views; run **Dart AOT Objects** for those, with or without b4a.
    - Unreadable/custom snapshot: select the managed executable region and run
      **Dart Machine Code Functions** (L1). Add known entries through
      **Confirmed entry addresses** if needed.
@@ -119,17 +121,34 @@ This view preserves NULs and lone surrogates without changing decompiler semanti
 For supported snapshots, optionally run **Dart AOT Objects** before **Dart ABI**.
 This L2 analyzer reads mapped snapshot symbols independently of b4a, creates function
 and alternate-entry boundaries, defines string payloads in **Defined Strings**, and
-stores object relationships and pool slots in non-loaded `DartObjects_*` blocks in the `OTHER` address space.
-Browse **Symbol Tree → Namespaces/Classes → Library** for library URL, class and function
-scopes. Top-level functions belong to their library; known allocation/field stubs belong
-to their class. Shared machine code keeps declaration labels in each owning scope
-and a single function body. **Library → ObjectPools → isolate → pool_<id> → slots** opens the logical
-pool in Listing: comments show each PP offset, kind, initial value and patchability.
-Proved PP accesses link to those slots; direct string loads also link to the character
-data, so **Defined Strings → References** can lead back to code. These links describe
-snapshot values, not constants guaranteed after runtime mutation. Strings used only
-by metadata remain reachable through object references. Serialized string length/encoding
-prefixes are defined separately from their characters; they are not trailing garbage.
+keeps object identities and pool slots as database records. Browse **Symbol Tree →
+Namespaces → Packages / SDK / App / Runtime / Unresolved** for declarations. Package
+URIs retain package/path/class nesting. Obfuscated libraries without a recoverable
+URI appear under **Packages → UnknownSource**, not as guessed packages.
+Top-level functions belong to their library; methods and known allocation/field stubs
+belong to their class. Shared code has one function body and scoped declaration aliases.
+Ghidra's Functions tree is mainly for global functions; use Namespaces for ownership
+and **Window → Functions** for a searchable table of all physical functions.
+
+Choose **Dart → Browse Dart Records** at code or a string to inspect its object/pool
+relationships in a docked panel. Double-click a relationship to follow it; real
+locations also navigate to Listing. **Back** returns to the previous record.
+Logical identities display their scope, record number and name, not a heap address.
+They do not create Symbol Tree labels or ordinary XREFs. Code-to-string references
+still point to original character bytes, so **Defined Strings → References** leads
+back to actual uses. Metadata-only strings remain accessible in the records panel.
+Pool edges describe snapshot initial values, not constants guaranteed after runtime
+mutation. Serialized string prefixes are separate from their characters.
+
+**Library → THR** lists observed Thread offsets, enriched with field names from b4a when available. **Library → PP → scope → pool**
+lists decoded pool slots; b4a-only imports use **PP → Export** until L2 binds the global
+pool. Selecting a field/slot shows its actual instruction uses in ordinary **XREFs**.
+Targets use named `THR:offset` / `PP:offset` (or pool-specific PP spaces), not bare
+`OTHER` records. These are non-loaded offset models with unknown bytes, not runtime
+memory or constant object pointers. Object-graph edges stay in Dart Records and do
+not enter ordinary XREFs. Unused fields have no invented references. THR offset XREFs come from decoded
+instructions without a layout; field names require the matching b4a export.
+L2 supplies pool identities independently.
 These logical identities are not runtime heap addresses. Declaration relationships,
 types, logical signatures and decoded integers are retained as database properties;
 logical parameter counts do not replace machine-code ABI inference. Serialized
@@ -146,8 +165,8 @@ Fixed user-class layouts appear under **Data Type Manager → Dart → L2**. Fie
 positions are converted from target words to bytes; tagged slots are not treated as
 native pointers, and unknown unboxed numeric types remain raw storage. Inherited fields
 use the retained superclass relationship. SDK-defined base identities such as null,
-bools, sentinels and internal Class objects appear under **Library → VM → BaseObjects**.
-Cached VM identities retain separate numbered labels; unavailable runtime contents are not inferred.
+bools, sentinels and internal Class objects retain named records in the object graph.
+Cached VM identities remain separate; unavailable runtime contents are not inferred.
 
 Open a deferred `*-<id>.part.so`/`.dylib` with its root and ancestor units beside it.
 L2 reads parent reference tables temporarily, validates program identity and applies
@@ -192,10 +211,10 @@ Large exports may take minutes and need disk-backed temporary space; a small
 RAM-backed `/tmp` can fill. Set Java's `-Djava.io.tmpdir=/path/on/disk` before
 starting Ghidra when needed.
 
-Browse **Symbol Tree → Library → package/dart/app → path → class**
+Browse **Symbol Tree → Namespaces → Packages / SDK / App → path → class**
 for methods and aliases, and **Data Type Manager → Dart → B4a → Classes** for raw
 class layouts. There is no parallel `Entries` tree. Exported functions without a
-class declaration use `Library → Runtime` as a fallback. User edits are preserved.
+class declaration use `Runtime` as a fallback. User edits are preserved.
 
 IL and operand descriptions appear in the Listing's **Dart Analysis** field,
 not in ordinary comments consumed by the decompiler. **DartViewsPlugin** installs
@@ -212,20 +231,24 @@ matches an exported offset, its description is attached to that same scoped slot
 No `B4aValues` copy or description-address reference is created. Code-to-character
 references continue to use the original file-backed strings.
 
-`Dart Objects` contains serialized Class/Function/Code identities and their graph.
-These records are not methods or runtime heap addresses. They currently use synthetic
-`OTHER` locations; object-graph edges also appear in ordinary XREF lists, where they
-should not be confused with machine-code accesses. Separating those relationships
-from ordinary XREFs remains a presentation limitation. Classes and methods live under
-`Library`; raw layouts live in the Data Type Manager. `objs.txt` is a textual instance dump, not a class/address schema.
-The unified JSON supplies class declarations/layouts; L2 supplies the object graph.
+Serialized Class/Function/Code identities and pool relationships are retained in a
+separate bidirectional index. Internal `OTHER` keys identify database records; no
+analysis-owned object edges appear in ordinary XREFs or the namespace tree.
+User-created references and labels are preserved. Raw class layouts live in the
+Data Type Manager. `objs.txt` is an instance text dump; the JSON supplies class
+metadata and L2 supplies the object graph.
 If snapshot decoding is unavailable, L3 names and annotations still work, but missing
 object addresses are not fabricated. Run **Dart ABI** as usual.
 
 Reimporting the same document upgrades the old zero-slot/text-overlay presentation
 while preserving user code names/comments. Modified synthetic metadata is rejected
-rather than discarded. Then run **Dart AOT Objects** to add or refresh the L2 graph.
-A fresh binary import gives the clean hierarchy when using an older L2 database.
+rather than discarded. Then run **Dart AOT Objects** to refresh L2. Existing generated
+object references and namespace scaffolding migrate transactionally; user-owned symbols and references
+are retained.
+
+Imported IL currently records a range, kind and display text. It is retained as
+analysis evidence, not executed as replacement P-code. Semantic lifting requires
+structured operands, widths and side effects plus validation against the instructions.
 
 ## Compatibility
 

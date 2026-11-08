@@ -86,7 +86,8 @@ public final class DartPoolReferences {
             if (address != null && address.pp() && width == 8 && slots.containsKey(address.offset())) {
               var target = slots.get(address.offset());
               RefType type = opcode == PcodeOp.LOAD ? RefType.READ : RefType.WRITE;
-              program.getReferenceManager().addMemoryReference(instruction.getAddress(), target, type, SourceType.ANALYSIS, -1);
+              ghidart.snapshot.DartObjectGraph.link(program, instruction.getAddress(), target, type);
+              ghidart.listing.DartSlotViews.access(program, instruction.getAddress(), target, type);
               ghidart.importer.B4aImporter.annotatePoolSlot(program,
                   instruction.getAddress(), target, address.offset());
               references++;
@@ -143,7 +144,7 @@ public final class DartPoolReferences {
       Long offset = null;
       Address poolSlot = null;
       boolean ambiguous = false;
-      for (var reference : program.getReferenceManager().getReferencesFrom(site.getKey())) {
+      for (var reference : ghidart.snapshot.DartObjectGraph.from(program, site.getKey())) {
         if (reference.getReferenceType() != RefType.READ) continue;
         String json = facts.getString(reference.getToAddress());
         if (json == null) continue;
@@ -166,7 +167,7 @@ public final class DartPoolReferences {
    * Base-object names live on the logical identity, not on a fabricated heap image.
    */
   private static String valueName(Program program, Address slot) {
-    for (var reference : program.getReferenceManager().getReferencesFrom(slot)) {
+    for (var reference : ghidart.snapshot.DartObjectGraph.from(program, slot)) {
       if (reference.getReferenceType() != RefType.DATA) continue;
       Address target = reference.getToAddress();
       var data = program.getListing().getDataAt(target);
@@ -177,9 +178,9 @@ public final class DartPoolReferences {
             name.appendCodePoint(Character.isLetterOrDigit(character) ? character : '_'));
         return name.toString();
       }
-      var symbol = program.getSymbolTable().getPrimarySymbol(target);
-      if (symbol != null && symbol.getParentNamespace().getName(true)
-          .equals("Library::VM::BaseObjects")) return "_" + symbol.getName();
+      String name = ghidart.snapshot.DartObjectGraph.describe(program, target);
+      int base = name.indexOf("BaseObjects::");
+      if (base >= 0) return "_" + name.substring(base + 13);
     }
     return "";
   }

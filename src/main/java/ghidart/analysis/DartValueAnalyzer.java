@@ -239,7 +239,7 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     }
     long seconds = (System.nanoTime() - started) / 1_000_000_000;
     String summary = functions + " functions, " + uses + " machine-value uses, "
-        + links + " native references, " + objectUses + " L2 object uses; " + skipped + " skipped, " + failed
+        + links + " references/relations, " + objectUses + " L2 object uses; " + skipped + " skipped, " + failed
         + " failed (" + timedOut + " timed out), " + seconds + " s.";
     monitor.setMessage(getName() + ": " + summary);
     log.appendMsg(getName(), summary + " PP offsets are not pool entries.");
@@ -535,6 +535,11 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     var addresses = program.getAddressFactory();
     var references = program.getReferenceManager();
     for (var link : facts.links()) {
+      Address from = addresses.getAddress(link.from());
+      Address to = addresses.getAddress(link.to());
+      if (ghidart.snapshot.DartObjectGraph.isIdentity(program, to)) {
+        ghidart.snapshot.DartObjectGraph.unlink(program, from, to, referenceType(link));
+      }
       var reference = references.getReference(addresses.getAddress(link.from()),
           addresses.getAddress(link.to()), -1);
       if (reference != null && reference.getSource() == SourceType.ANALYSIS
@@ -561,6 +566,16 @@ public final class DartValueAnalyzer extends AbstractAnalyzer {
     for (var link : facts.links()) {
       Address from = program.getAddressFactory().getAddress(link.from());
       Address to = program.getAddressFactory().getAddress(link.to());
+      if (ghidart.snapshot.DartObjectGraph.isIdentity(program, to)) {
+        boolean exists = ghidart.snapshot.DartObjectGraph.from(program, from).stream()
+            .anyMatch(edge -> edge.getToAddress().equals(to) && edge.getReferenceType() == referenceType(link));
+        if (!exists) {
+          ghidart.snapshot.DartObjectGraph.link(program, from, to, referenceType(link));
+          owned.add(link);
+          property.add(function.getEntryPoint(), JSON.toJson(new Facts(facts.uses(), owned)));
+        }
+        continue;
+      }
       boolean existing = false;
       for (var reference : references.getReferencesFrom(from)) {
         existing |= reference.getToAddress().equals(to);

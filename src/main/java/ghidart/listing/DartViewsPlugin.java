@@ -24,8 +24,11 @@ import java.util.LinkedHashSet;
 @PluginInfo(status = PluginStatus.STABLE, packageName = CorePluginPackage.NAME, category = "Analysis",
     shortDescription = "Dart fact views", description = "Show saved b4a records, value uses and full character payloads in the Console.")
 public final class DartViewsPlugin extends ProgramPlugin {
+  private final DartObjectProvider objects;
   public DartViewsPlugin(PluginTool tool) {
     super(tool);
+    objects = new DartObjectProvider(tool, getName());
+    action("Browse Dart Records", () -> objects.show(currentProgram, currentLocation.getAddress()));
     action("Show Dart Records", this::showRecords);
     action("Show Value Uses", this::showUses);
     action("Show Characters", this::showCharacters);
@@ -46,6 +49,18 @@ public final class DartViewsPlugin extends ProgramPlugin {
     model.addRow(row);
     model.addFactory(new B4aAnnotationFieldFactory(), row, 0);
     model.getFactorys(row)[0].setWidth(900);
+  }
+
+  @Override
+  protected void programClosed(ghidra.program.model.listing.Program program) {
+    objects.clear();
+  }
+
+  @Override
+  protected void dispose() {
+    objects.clear();
+    objects.removeFromTool();
+    super.dispose();
   }
 
   private void action(String name, Runnable show) {
@@ -79,6 +94,8 @@ public final class DartViewsPlugin extends ProgramPlugin {
     var function = currentProgram.getFunctionManager().getFunctionContaining(selected);
     if (function != null) addresses.add(function.getEntryPoint());
     for (Address address : new LinkedHashSet<>(addresses)) {
+      for (var edge : ghidart.snapshot.DartObjectGraph.from(currentProgram, address)) addresses.add(edge.getToAddress());
+      for (var edge : ghidart.snapshot.DartObjectGraph.to(currentProgram, address)) addresses.add(edge.getFromAddress());
       for (var reference : currentProgram.getReferenceManager().getReferencesFrom(address)) {
         if (reference.isMemoryReference()) addresses.add(reference.getToAddress());
       }
@@ -99,7 +116,7 @@ public final class DartViewsPlugin extends ProgramPlugin {
       for (Address address : addresses) {
         String record = facts.getString(address);
         if (record == null) continue;
-        print(address + " [" + source + "]\n" + json.toJson(JsonParser.parseString(record)));
+        print(ghidart.snapshot.DartObjectGraph.describe(currentProgram, address) + " [" + source + "]\n" + json.toJson(JsonParser.parseString(record)));
         found = true;
       }
     }
@@ -123,8 +140,9 @@ public final class DartViewsPlugin extends ProgramPlugin {
     }
     for (var use : objects) {
       var address = currentProgram.getAddressFactory().getAddress(use.declaration());
-      var symbol = address == null ? null : currentProgram.getSymbolTable().getPrimarySymbol(address);
-      print(use.site() + "  " + use.kind() + "  " + (symbol == null ? use.declaration() : symbol.getName(true))
+      String description = address == null ? use.declaration()
+          : ghidart.snapshot.DartObjectGraph.describe(currentProgram, address);
+      print(use.site() + "  " + use.kind() + "  " + description
           + (use.value().isEmpty() ? "" : " [physical input " + use.value() + "]"));
     }
   }

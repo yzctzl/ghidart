@@ -102,9 +102,13 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
         // transaction. No weak caches or partial Results escape this pass.
         int transaction = program.startTransaction("Publish Dart AOT objects");
         boolean commit = false;
-        try {
+        try (var graph = DartObjectGraph.batch(program, monitor)) {
+          DartObjectGraph.migrate(program, monitor);
+          ghidart.listing.DartNamespaces.migrate(program, monitor);
           for (Snapshot snapshot : snapshots) publish(program, snapshot, monitor, output.messages());
+          ghidart.importer.B4aImporter.restoreModelReferences(program, monitor);
           monitor.checkCancelled();
+          graph.flush();
           commit = true;
           program.getOptions(OWNER).setString("L2.status", "PUBLISHED");
         } finally {
@@ -739,9 +743,9 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       publishSemanticFacts(program, snapshot, anchor, monitor);
       program.getOptions(OWNER).setInt(semantics, 1);
     }
-    if (program.getOptions(OWNER).getInt(option, 0) != 8) {
+    if (program.getOptions(OWNER).getInt(option, 0) != 9) {
       DartSnapshotSymbols.publish(program, snapshot, anchor, monitor, log);
-      program.getOptions(OWNER).setInt(option, 8);
+      program.getOptions(OWNER).setInt(option, 9);
     }
     String typeOption = OWNER + "." + snapshot.scope() + ".classTypes";
     if (program.getOptions(OWNER).getInt(typeOption, 0) != 4) {
@@ -753,11 +757,27 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       publishFunctionCodes(program, snapshot, anchor, monitor);
       program.getOptions(OWNER).setInt(codeOption, 1);
     }
+    String views = OWNER + "." + snapshot.scope() + ".slotViews";
+    if (program.getOptions(OWNER).getInt(views, 0) != 1) {
+      ghidart.listing.DartSlotViews.publishPools(program, snapshot, anchor, monitor);
+      program.getOptions(OWNER).setInt(views, 1);
+    }
+    String threadOption = OWNER + "." + snapshot.scope() + ".threadReferences";
+    if (program.getOptions(OWNER).getInt(threadOption, 0) != 1) {
+      var ranges = new AddressSet();
+      for (var payload : snapshot.table().uniqueRanges) {
+        Address start = snapshot.instructions().add(payload.pcOffset);
+        ranges.add(start, start.add(payload.size - 1));
+      }
+      int links = ghidart.listing.DartSlotViews.publishThreadAccesses(program, ranges, monitor);
+      log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + links + " observed THR accesses (no layout required).");
+      program.getOptions(OWNER).setInt(threadOption, 1);
+    }
     String poolOption = OWNER + "." + snapshot.scope() + ".poolReferences";
-    if (program.getOptions(OWNER).getInt(poolOption, 0) != 3) {
+    if (program.getOptions(OWNER).getInt(poolOption, 0) != 5) {
       int links = DartPoolReferences.publish(program, snapshot, anchor, monitor);
       log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + links + " PP slot references.");
-      program.getOptions(OWNER).setInt(poolOption, 3);
+      program.getOptions(OWNER).setInt(poolOption, 5);
     }
   }
 
@@ -1004,7 +1024,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
   }
 
   private static void reference(Program program, Address from, Address to) {
-    program.getReferenceManager().addMemoryReference(from, to, RefType.DATA, SourceType.ANALYSIS, 0);
+    DartObjectGraph.link(program, from, to, RefType.DATA);
   }
 
   static Address symbol(Program program, String name) throws IOException {

@@ -32,7 +32,7 @@ import java.util.Set;
  * stubs, and proved method receiver physical entry storage. An SSA value carries
  * one known implementation layout or a bounded set of candidate layouts. Only
  * copies, constant address arithmetic and unanimous merges preserve that fact.
- * Field references denote declarations in OTHER, never physical heap storage.
+ * Field relationships denote retained declarations, never physical heap storage.
  * Loads remain loads; signatures and P-code are unchanged. Whole SSA locals with
  * one proved full-width tagged Class may use native shifted-pointer types.
  * Compressed values remain integers; no runtime heap address is fabricated.
@@ -202,7 +202,7 @@ final class DartObjectUses {
 
       // Allocation stub: owner is a Class
       if (index.classes.containsKey(owner)) {
-        for (var ref : program.getReferenceManager().getReferencesFrom(address)) {
+        for (var ref : ghidart.snapshot.DartObjectGraph.from(program, address)) {
           Address target = ref.getToAddress();
           if (program.getFunctionManager().getFunctionAt(target) == null) continue;
           Address old = index.allocations.putIfAbsent(target, owner);
@@ -233,7 +233,7 @@ final class DartObjectUses {
             "InvokeFieldDispatcher", "DynamicInvocationForwarder", "FieldInitializer").contains(role);
         receiver = new Receiver(owner, signature.get("numFixed").getAsInt() + 1, stackOnly);
       }
-      for (var ref : program.getReferenceManager().getReferencesFrom(identity)) {
+      for (var ref : ghidart.snapshot.DartObjectGraph.from(program, identity)) {
         Address target = ref.getToAddress();
         if (program.getFunctionManager().getFunctionAt(target) == null) continue;
         if (receiver == null) {
@@ -268,7 +268,7 @@ final class DartObjectUses {
           || !function.getReturn().getSource().isLowerOrEqualPriorityThan(
               SourceType.ANALYSIS)) continue;
       boolean allocation = false;
-      for (var ref : program.getReferenceManager().getReferencesTo(function.getEntryPoint())) {
+      for (var ref : ghidart.snapshot.DartObjectGraph.to(program, function.getEntryPoint())) {
         String json = facts.getString(ref.getFromAddress());
         if (json == null || !json.contains("\"kind\":\"Code\"")) continue;
         var code = JsonParser.parseString(json).getAsJsonObject().getAsJsonObject("object");
@@ -504,9 +504,11 @@ final class DartObjectUses {
   }
 
   private String name(Address identity) {
-    var symbol = program.getSymbolTable().getPrimarySymbol(identity);
-    if (symbol == null) return Long.toHexString(identity.getOffset());
-    String text = symbol.getName().equals("class_info") ? symbol.getParentNamespace().getName() : symbol.getName();
+    String text = ghidart.snapshot.DartObjectGraph.name(program, identity);
+    if (text == null) text = ghidart.snapshot.DartObjectGraph.describe(program, identity);
+    text = text.replaceFirst("^(Class|Field|Function|Code) ", "");
+    int scope = text.lastIndexOf("::");
+    if (scope >= 0) text = text.substring(scope + 2);
     text = SymbolUtilities.replaceInvalidChars(text, true);
     return text.length() > 80 ? text.substring(0, 80) : text;
   }
@@ -567,7 +569,7 @@ final class DartObjectUses {
                 Address targetInst = null;
                 boolean sameInstance = true;
                 boolean validPp = false;
-                for (var ref : program.getReferenceManager().getReferencesFrom(op.getSeqnum().getTarget())) {
+                for (var ref : ghidart.snapshot.DartObjectGraph.from(program, op.getSeqnum().getTarget())) {
                   if (ref.getReferenceType() != RefType.READ) continue;
                   var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
                   String json = facts == null ? null : facts.getString(ref.getToAddress());
@@ -580,7 +582,7 @@ final class DartObjectUses {
                   Address slotType = null;
                   Address slotInst = null;
                   boolean sameSlotInstance = true;
-                  for (var target : program.getReferenceManager().getReferencesFrom(ref.getToAddress())) {
+                  for (var target : ghidart.snapshot.DartObjectGraph.from(program, ref.getToAddress())) {
                     Address candidate = instances.get(target.getToAddress());
                     if (candidate == null) { slotType = null; break; }
                     if (slotType != null && !slotType.equals(candidate)) { slotType = null; break; }

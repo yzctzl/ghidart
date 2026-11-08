@@ -151,13 +151,27 @@ original image identity and loaded RVA checks, applies Code boundaries, then str
 semantic records into hierarchical library/class namespaces, raw layouts and Listing-only
 annotations. Full declarations and aliases are retained at real code addresses in
 `ghidart.b4a` properties; **Dart → Show Dart Records** displays them. L2/L3 share
-`Library → URI path → class`; serialized graph identities are separate under `Dart Objects`.
+`Packages / SDK / App → URI path → class`; unresolved library origins use
+`Packages → UnknownSource`. Runtime helpers and unresolved ownership have separate roots.
+Serialized identities and pool relationships use a private bidirectional index, not
+Symbol Tree labels or native XREFs. **Dart → Browse Dart Records** navigates these
+relationships separately from real code/data references.
+`Library::THR` and `Library::PP::<scope>::pool_<id>` provide named offset models
+for field/slot browsing and actual access-site XREFs. b4a-only pools use `PP::Export`;
+L2 reuses that global pool model when its identity is available. Model overlays are
+non-loaded and uninitialized; their coordinates are not runtime addresses. Native
+XREFs may target these named models, but not arbitrary serialized object identities.
 Descriptions appear in a Listing-only field, not in a synthetic text/zero memory image.
 L3 runs first and supplies preferred names and boundaries. L2 still decodes objects,
 strings and pool references, retaining L3 names and avoiding duplicate boundaries.
 For a proved L2 PP access, matching L3 descriptions attach to the existing scoped slot;
 string references retain their original file-backed destinations. Without a supported
 snapshot, descriptions do not fabricate runtime pointers or character addresses.
+
+IL rows currently contain only `[start, end, kind, text]`, not structured operands
+or complete machine effects. Future semantic consumers need explicit inputs/outputs,
+widths, memory/control effects and versioned operation definitions; display text is
+not an executable interchange format. Machine P-code remains the semantic baseline.
 
 Printed types/IL and pool descriptions remain presentation evidence. They are not
 parsed into replacement P-code, physical call contracts, string addresses or host

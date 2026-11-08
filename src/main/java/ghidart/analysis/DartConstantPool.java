@@ -12,31 +12,59 @@ import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.RefType;
 
 /** A Dart String reference is a managed value, never a pointer to its file characters. */
-final class DartConstantPool extends ConstantPool {
+public final class DartConstantPool extends ConstantPool {
   private final Program program;
 
   DartConstantPool(Program program) { this.program = program; }
 
+  /** The same evidence decision drives native lifting and the user's explanation.
+   * A recorded initial value alone does not prove a slot remains constant at runtime.
+   */
+  public record Evidence(Address slot, String value, String explanation) {
+    public boolean liftable() { return value != null; }
+  }
+
   static Address reference(Program program, Address site) {
+    var evidence = evidence(program, site);
+    return evidence.liftable() ? evidence.slot() : null;
+  }
+
+  public static Evidence evidence(Program program, Address site) {
     var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
-    if (facts == null) return null;
+    if (facts == null) return new Evidence(null, null, "No validated L2 pool records are present.");
+    Address modelRecord = ghidart.listing.DartSlotViews.forRecord(program, site);
+    if (modelRecord != null && facts.hasProperty(modelRecord)) site = modelRecord;
+    String raw = facts.getString(site);
+    if (raw != null && raw.contains("\"poolRef\"")) return string(program, site);
     Address slot = null;
     for (var edge : DartObjectGraph.from(program, site)) {
       if (edge.getReferenceType() != RefType.READ) continue;
-      if (slot != null) return null;
+      if (slot != null) return new Evidence(null, null,
+          "Several read targets are recorded; one stable pool identity has not been established.");
       slot = edge.getToAddress();
     }
-    return slot != null && string(program, slot) != null ? slot : null;
+    return slot == null ? new Evidence(null, null,
+        "No validated pool read is recorded here. Writes and THR calls are not constant loads.")
+        : string(program, slot);
   }
 
-  private static String string(Program program, Address slot) {
+  private static Evidence string(Program program, Address slot) {
     var facts = program.getUsrPropertyManager().getStringPropertyMap("ghidart.L2.objects.v1");
     String raw = facts == null ? null : facts.getString(slot);
-    if (raw == null) return null;
+    if (raw == null) return new Evidence(slot, null, "The read target has no validated L2 slot record.");
     var entry = JsonParser.parseString(raw).getAsJsonObject();
-    if (!entry.has("poolRef") || !entry.has("stableTaggedBits")
-        || !entry.get("kind").getAsString().equals("TAGGED")
-        || entry.get("bits").getAsInt() != entry.get("stableTaggedBits").getAsInt()) return null;
+    if (!entry.has("poolRef") || !entry.has("kind")) {
+      return new Evidence(slot, null, "The read target is not a validated object-pool slot.");
+    }
+    if (!entry.get("kind").getAsString().equals("TAGGED")) {
+      return new Evidence(slot, null, "This slot contains " + entry.get("kind").getAsString()
+          + "; native String substitution does not apply.");
+    }
+    if (!entry.has("stableTaggedBits") || !entry.has("bits")
+        || entry.get("bits").getAsInt() != entry.get("stableTaggedBits").getAsInt()) {
+      return new Evidence(slot, null,
+          "The initial object is recorded, but slot traits do not prove an immutable tagged value.");
+    }
     String value = null;
     for (var edge : DartObjectGraph.from(program, slot)) {
       if (edge.getReferenceType() != RefType.DATA) continue;
@@ -45,14 +73,23 @@ final class DartConstantPool extends ConstantPool {
       // Only file-backed characters published by the validated snapshot reader.
       var block = program.getMemory().getBlock(data.getAddress());
       if (block == null || !block.isLoaded() || !block.isInitialized() || block.isArtificial()) continue;
-      if (value != null || !(data.getValue() instanceof String text) || text.indexOf(0) >= 0
-          || !java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(text)) return null;
-      // Native CPOOL prints NUL-terminated UTF-8. Keep embedded NULs and
-      // unpaired Dart UTF-16 units in explicit-length data and raw loads,
-      // rather than truncating or silently inserting replacement characters.
+      if (value != null) return new Evidence(slot, null, "Several character payloads are linked to this slot.");
+      if (!(data.getValue() instanceof String text)) {
+        return new Evidence(slot, null, "The character data has no decodable String value.");
+      }
+      // Native CPOOL prints NUL-terminated UTF-8. Preserve explicit-length data
+      // for embedded NULs and unpaired UTF-16 units instead of silently truncating.
+      if (text.indexOf(0) >= 0) return new Evidence(slot, null,
+          "Embedded NUL: kept as explicit-length data; native String literals would truncate it.");
+      if (!java.nio.charset.StandardCharsets.UTF_8.newEncoder().canEncode(text)) {
+        return new Evidence(slot, null,
+            "Unpaired UTF-16 units: kept as raw character data to preserve the exact value.");
+      }
       value = text;
     }
-    return value;
+    return new Evidence(slot, value, value == null
+        ? "No unique file-backed String payload is linked; the initial object remains available in Dart Records."
+        : "Stable tagged String with file-backed characters; eligible for native literal substitution.");
   }
 
   @Override
@@ -65,7 +102,7 @@ final class DartConstantPool extends ConstantPool {
           + java.util.Arrays.toString(references));
     }
     Address slot = program.getAddressFactory().getAddressSpace("OTHER").getAddress(references[0]);
-    String value = string(program, slot);
+    String value = string(program, slot).value();
     if (value == null) throw new IllegalStateException("Dart pool evidence changed; refresh decompilation");
     var record = new Record();
     record.tag = STRING_LITERAL;

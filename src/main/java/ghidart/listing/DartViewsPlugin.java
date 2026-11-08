@@ -28,9 +28,11 @@ public final class DartViewsPlugin extends ProgramPlugin {
   public DartViewsPlugin(PluginTool tool) {
     super(tool);
     objects = new DartObjectProvider(tool, getName());
+    action("Show Analysis Status", false, this::showStatus);
     action("Browse Dart Records", () -> objects.show(currentProgram, currentLocation.getAddress()));
     action("Show Dart Records", this::showRecords);
     action("Show Value Uses", this::showUses);
+    action("Explain Pool Value", this::explainPool);
     action("Show Characters", this::showCharacters);
   }
 
@@ -53,7 +55,7 @@ public final class DartViewsPlugin extends ProgramPlugin {
 
   @Override
   protected void programClosed(ghidra.program.model.listing.Program program) {
-    objects.clear();
+    objects.clear(program);
   }
 
   @Override
@@ -64,10 +66,16 @@ public final class DartViewsPlugin extends ProgramPlugin {
   }
 
   private void action(String name, Runnable show) {
+    action(name, true, show);
+  }
+
+  private void action(String name, boolean needsLocation, Runnable show) {
     var action = new DockingAction(name, getName()) {
       @Override
       public boolean isEnabledForContext(ActionContext context) {
-        return currentProgram != null && currentLocation != null;
+        return currentProgram != null
+            && "AARCH64:LE:64:dart".equals(currentProgram.getLanguageID().toString())
+            && (!needsLocation || currentLocation != null);
       }
 
       @Override
@@ -85,6 +93,50 @@ public final class DartViewsPlugin extends ProgramPlugin {
     var console = tool.getService(ConsoleService.class);
     if (console != null) console.println(text);
     else Msg.info(this, text);
+  }
+
+  /** Report persisted evidence, not an inferred percentage of analysis completion. */
+  private void showStatus() {
+    for (String line : analysisStatus(currentProgram,
+        currentLocation == null ? null : currentLocation.getAddress())) print(line);
+  }
+
+  static java.util.List<String> analysisStatus(ghidra.program.model.listing.Program program, Address location) {
+    var lines = new java.util.ArrayList<String>();
+    var properties = program.getUsrPropertyManager();
+    lines.add("Dart analysis — " + program.getDomainFile().getPathname());
+    lines.add("Language: " + program.getLanguageID() + " " + program.getLanguage().getVersion()
+        + "." + program.getLanguage().getMinorVersion() + "; compiler: " + program.getCompilerSpec().getCompilerSpecID());
+    for (String[] entry : new String[][] {
+        {"L1 boundary records", "ghidart.L1.functions"},
+        {"L2 object/slot records", "ghidart.L2.objects.v1"},
+        {"b4a retained records", B4aImporter.FACTS},
+        {"Value-use function records", "ghidart.machineValueUses.v1"}}) {
+      var map = properties.getStringPropertyMap(entry[1]);
+      lines.add(entry[0] + ": " + (map == null ? "not present" : map.getSize()));
+    }
+    String status = program.getOptions("ghidart.L2").getString("L2.status", "not run");
+    lines.add("Latest L2 attempt: " + status + ". Existing records may predate this attempt.");
+    var function = location == null ? null
+        : program.getFunctionManager().getFunctionContaining(location);
+    if (function != null) {
+      lines.add("Current function: " + function.getName(true) + " @ " + function.getEntryPoint());
+      lines.add("Physical prototype (" + function.getSignatureSource() + "): " + function.getPrototypeString(false, false));
+      var uses = properties.getStringPropertyMap("ghidart.machineValueUses.v1");
+      lines.add("Saved value analysis here: " + (uses != null && uses.hasProperty(function.getEntryPoint()) ? "present" : "not present"));
+      if (function.getTags().stream().anyMatch(tag -> tag.getName().equals("Dart: incomplete CFG"))) {
+        lines.add("Incomplete CFG: resolve the unknown flow before relying on inferred parameters.");
+      }
+    }
+    if (properties.getStringPropertyMap("ghidart.L2.objects.v1") == null) {
+      lines.add("Next: Analysis > One Shot > Dart AOT Objects for supported snapshots. "
+          + "Import matching b4a data first if available; L1 remains independent.");
+    }
+    lines.add("For pseudocode: select functions and run Dart Value Uses (ABI recovery is on by default). "
+        + "This does not run automatically on open.");
+    lines.add("Browse: Namespaces for declarations; Library > PP / THR for instruction uses; "
+        + "Defined Strings for characters; Dart > Browse Dart Records for relationships.");
+    return java.util.List.copyOf(lines);
   }
 
   private LinkedHashSet<Address> locations() {
@@ -121,6 +173,20 @@ public final class DartViewsPlugin extends ProgramPlugin {
       }
     }
     if (!found) print("No Dart record here. Select code, an object or a pool slot after L2/L3 analysis.");
+  }
+
+  private void explainPool() {
+    Address site = currentLocation.getAddress();
+    var evidence = ghidart.analysis.DartConstantPool.evidence(currentProgram, site);
+    print("Dart pool evidence at " + site + ": " + evidence.explanation());
+    if (evidence.slot() != null) {
+      print("Slot: " + ghidart.snapshot.DartObjectGraph.describe(currentProgram, evidence.slot()));
+      print("Use Dart > Browse Dart Records to follow the initial object and character payload.");
+    }
+    if (evidence.liftable()) {
+      print("The load instruction must also support the native pool fixup. "
+          + "Slot eligibility alone does not prove this value survives later code.");
+    }
   }
 
   private void showUses() {

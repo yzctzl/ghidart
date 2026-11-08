@@ -66,11 +66,16 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
    - Unreadable/custom snapshot: select the managed executable region and run
      **Dart Machine Code Functions** (L1). Add known entries through
      **Confirmed entry addresses** if needed.
-3. Select the functions of interest and run **Dart ABI**, then open the decompiler.
-   ABI recovery is still required after L2 or b4a supplies boundaries.
-4. Run **Dart Value Uses** to connect proved object types and pool values to pseudocode.
-   It recovers ABI first by default; disable **Recover ABI before value analysis**
-   only when deliberately retaining existing automatic contracts.
+3. Select the functions of interest and run **Dart Value Uses**, then open the
+   decompiler. It recovers the physical ABI first, then connects proved object
+   types and pool values to pseudocode. For ABI recovery alone, run **Dart ABI**.
+   Disable **Recover ABI before value analysis** only when deliberately retaining
+   existing automatic contracts. L2/b4a boundaries alone do not recover the ABI.
+
+Choose **Dart → Show Analysis Status** to see which records are present, the latest
+L2 attempt, the current physical prototype and whether value analysis ran here.
+These are saved evidence counts, not a correctness or coverage score.
+After a language upgrade, save the program so reopening does not repeat the upgrade.
 
 All six analyzers are available under **Analysis → One Shot** for the Dart language.
 L2 and b4a import read their complete input, regardless of selection;
@@ -137,12 +142,20 @@ and **Window → Functions** for a searchable table of all physical functions.
 Choose **Dart → Browse Dart Records** at code or a string to inspect its object/pool
 relationships in a docked panel. Double-click a relationship to follow it; real
 locations also navigate to Listing. **Back** returns to the previous record.
+String locations show their text, byte length and encoding; **Raw records** exposes the complete saved facts. Relationships
+are paged in groups of 200; **Filter page** searches the current page. Hover over a
+truncated cell for its full name or address. Shared objects keep all relationships
+without filling the UI with hundreds of thousands of rows.
 Logical identities display their scope, record number and name, not a heap address.
 They do not create Symbol Tree labels or ordinary XREFs. Code-to-string references
 still point to original character bytes, so **Defined Strings → References** leads
 back to actual uses. Metadata-only strings remain accessible in the records panel.
 Pool edges describe snapshot initial values, not constants guaranteed after runtime
 mutation. Serialized string prefixes are separate from their characters.
+**Dart → Explain Pool Value** explains native String substitution at a load or PP
+slot using the same evidence checks as the decompiler. Mutable slots, ambiguous
+origins and unsupported characters retain their original loads. **Class Layout**
+in Dart Records selects the decoded Class structure in Ghidra's Data Types tree.
 
 **Library → THR** lists observed Thread offsets, enriched with field names from b4a when available. **Library → PP → scope → pool**
 lists decoded pool slots; b4a-only imports use **PP → Export** until L2 binds the global

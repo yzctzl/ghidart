@@ -226,8 +226,11 @@ public final class DartObjectGraph {
     var node = com.google.gson.JsonParser.parseString(stored).getAsJsonObject();
     if (!isIdentity(program, edge.getToAddress())) {
       if (program.getFunctionManager().getFunctionAt(edge.getToAddress()) != null) return "code entry";
-      return node.has("kind") && node.get("kind").getAsString().equals("String")
-          ? "characters" : "serialized payload";
+      var data = program.getListing().getDefinedDataAt(edge.getToAddress());
+      if (data != null && data.hasStringValue()) {
+        return node.has("poolRef") ? "initial string characters" : "characters";
+      }
+      return "serialized payload";
     }
     if (node.has("poolRef")) return "initial pool value";
     var source = program.getMemory().getBlock(edge.getFromAddress());

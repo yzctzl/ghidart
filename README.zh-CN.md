@@ -58,11 +58,15 @@ export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.2_PUBLIC
      这部分请手动运行 **Dart AOT Objects**，不要求导入 b4a。
    - 快照不可读或经过自定义修改：选中 managed 可执行区域，执行
      **Dart Machine Code Functions**（L1）；必要时通过 **Confirmed entry addresses** 补充入口。
-3. 选中关注的函数，执行 **Dart ABI**，然后打开反编译窗口。
-   L2 或 b4a 提供边界后，仍需执行 ABI 恢复。
-4. 运行 **Dart Value Uses**，将已证明的对象类型、池值接入伪代码。
-   默认先恢复 ABI；仅在需要保留现有自动契约时关闭
-   **Recover ABI before value analysis**。
+3. 选中关注的函数，执行 **Dart Value Uses**，然后打开反编译窗口。
+   它默认先恢复物理 ABI，再将已证明的对象类型和池值接入伪代码；
+   只需要 ABI 恢复时，单独执行 **Dart ABI**。
+   仅在需要保留现有自动契约时关闭 **Recover ABI before value analysis**。
+   L2／b4a 提供函数边界本身不等于恢复物理 ABI。
+
+选择 **Dart → Show Analysis Status**，查看已保存的各层记录、最近一次 L2 尝试、
+当前物理原型及此函数是否运行过值分析。记录数量不代表正确率或覆盖率。
+语言升级后请保存数据库，避免下次打开时重复升级。
 
 Dart 语言下，这六项均可通过 **Analysis → One Shot** 执行。
 L2 和 b4a 导入始终读取完整输入，不受选区限制；选区用于限定机器码发现范围
@@ -112,10 +116,16 @@ Ghidra 的 Functions 树主要显示全局函数；按归属浏览使用 Namespa
 
 在代码或字符串处选择 **Dart → Browse Dart Records**，通过停靠面板查看对象和池关系。
 双击关系可继续查看；真实位置同时跳转 Listing，**Back** 返回上一条记录。
+字符串位置直接显示正文、字节长度和编码；**Raw records** 查看完整保存数据。
+关系按每页 200 条显示，**Filter page** 过滤当前页；悬停单元格查看完整名称或地址。
+共享对象保留全部关系，无需一次性向界面填充数十万行。
 逻辑身份显示作用域、记录编号和名称，不冒充堆地址，也不再生成符号树标签或普通 XREF。
 代码到字符串的引用仍指向原始字符区，可从 **Defined Strings → References** 返回真实使用处。
 仅元数据使用的字符串通过记录面板访问。池关系表示快照初始值，不保证运行时修改后不变。
 字符串的序列化前缀与正文分别定义。
+**Dart → Explain Pool Value** 在加载指令或 PP 槽位处解释能否替换为原生字符串字面量，
+与反编译器共用证据检查。可变槽位、来源不唯一或字符无法无损表示时保留原始加载。
+记录面板的 **Class Layout** 可直接在 Ghidra Data Types 树中定位已解码的类结构。
 
 **Library → THR** 列出实际观察到的 Thread 偏移，有 b4a 时补充字段名；**Library → PP → scope → pool** 列出解析出的池槽。
 只有 b4a 时暂归 **PP → Export**，L2 确定全局池后复用同一视图。

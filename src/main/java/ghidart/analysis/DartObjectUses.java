@@ -367,20 +367,26 @@ final class DartObjectUses {
   /** Match a complete recovered physical prototype to a required-argument entry.
    * ARM64 Dart register arguments start at x1, not the result register x0.
    * Stack-only entries reverse logical arguments; this is the highest slot.
-   * Missing inputs, optional copies and user/imported prototypes remain unknown.
+   * The independent x4 arguments descriptor is not a positional slot. Missing
+   * inputs, optional copies and user/imported prototypes remain unknown.
    * The owner proves an implementation layout, not exact runtime subtype.
    */
   private Address receiverStorage(Function function, Receiver receiver) {
     if (receiver == null || receiver.parameters() < 1
-        || function.getParameterCount() != receiver.parameters()
         || function.getSignatureSource().isHigherPriorityThan(SourceType.ANALYSIS)) return null;
     Address register = null;
+    int positional = 0;
     var stack = new HashSet<Long>();
     for (var parameter : function.getParameters()) {
       if (parameter.getSource().isHigherPriorityThan(SourceType.ANALYSIS)) return null;
       var storage = parameter.getVariableStorage().getVarnodes();
       if (storage.length != 1 || storage[0].getSize() != 8) return null;
       var node = storage[0];
+      // ARGS_DESC_REG (x4) is a separate SDK calling-convention input,
+      // not a Dart positional argument. Keep it in the physical prototype,
+      // but do not let its liveness invalidate an otherwise exact receiver.
+      if (node.isRegister() && node.getAddress().equals(program.getRegister("x4").getAddress())) continue;
+      positional++;
       if (node.isRegister()) {
         var reg = program.getRegister(node.getAddress(), node.getSize());
         if (reg == null || !Set.of("x1", "x2", "x3", "x5", "x6", "x7",
@@ -390,6 +396,7 @@ final class DartObjectUses {
         stack.add(node.getOffset());
       } else return null;
     }
+    if (positional != receiver.parameters()) return null;
     if (!receiver.stackOnly() && register != null) return register;
     if (stack.size() != receiver.parameters()) return null;
     for (int i = 0; i < receiver.parameters(); i++) if (!stack.contains(i * 8L)) return null;
@@ -570,13 +577,24 @@ final class DartObjectUses {
       // allocation result would incorrectly type unrelated register reuses or
       // mixed-class merges that Ghidra grouped into the same local. Different
       // instances of the same Class share a type, not an object identity.
+      var receiver = receivers.get(function.getEntryPoint());
+      var inputStorage = receiverStorage(function, receiver);
+      boolean entryReceiver = node.isInput()
+          && node.getHigh() instanceof ghidra.program.model.pcode.HighParam
+          && node.getAddress().equals(inputStorage) && object.type.equals(receiver.owner());
+      // A proved entry receiver is an input contract, not a statement about
+      // every later memory version that Ghidra merges with its HighParam.
+      // Publish that native parameter type even when an unknown call models a
+      // stack clobber. Locals and return values still require whole-SSA proof.
       boolean exact = true;
-      for (var instance : node.getHigh().getInstances()) {
-        var incoming = value(instance, high, values, active, 0, monitor);
-        if (incoming == null || incoming == CYCLE || incoming.compressed
-            || incoming.displacement != 1 || !object.type.equals(incoming.type)) {
-          exact = false;
-          break;
+      if (!entryReceiver) {
+        for (var instance : node.getHigh().getInstances()) {
+          var incoming = value(instance, high, values, active, 0, monitor);
+          if (incoming == null || incoming == CYCLE || incoming.compressed
+              || incoming.displacement != 1 || !object.type.equals(incoming.type)) {
+            exact = false;
+            break;
+          }
         }
       }
       if (!exact) continue;

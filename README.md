@@ -216,7 +216,8 @@ native shifted-pointer type (`ADJ(obj)->field`); compressed values remain intege
 This also applies to stable pool instances and merged locals whose alternatives
 all prove the same Class. Different instances do not require different types;
 an unknown or patchable alternative prevents whole-local typing.
-Proved receiver and return types also enrich native prototypes without changing
+The receiver matcher separates the x4 arguments descriptor from positional inputs.
+Proved entry receiver and return types enrich native prototypes without changing
 parameter counts or physical storage. Callers can then use those return types for
 field access. Reanalysis revokes unchanged generated types before ABI recovery,
 so stale local types cannot recreate a revoked conclusion; user prototypes are preserved.

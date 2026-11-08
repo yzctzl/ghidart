@@ -50,14 +50,14 @@ install into the Ghidra directory above. Restart any running Ghidra after updati
 1. For ELF, choose **Dart AOT ELF**. For Mach-O, use the official loader and select
    language `AARCH64:LE:64:dart`, compiler `dart` (or `dart-r23` for Dart 2.13-era binaries
    with dedicated x23 heap base); choose the ARM64 slice for FAT files.
-2. Choose one initial boundary source:
-   - Supported snapshot, without b4a: keep **Dart AOT Objects** (L2) enabled during
-     Auto Analyze, or run it from One Shot. It creates
+2. Dart analyzers are disabled by default, including when a sidecar exists.
+   Choose an initial boundary source from **Analysis → One Shot**:
+   - Supported snapshot, without b4a: run **Dart AOT Objects** (L2). It creates
      functions and entry labels, strings, object relationships and scoped pools.
-   - Matching `b4a.json`: **Dart b4a Import** (L3) is enabled by default when a sidecar
-     exists beside the binary. You can disable it, run it from One Shot, or set
+   - Matching `b4a.json`: run **Dart b4a Import** (L3). A sidecar
+     beside the binary is found automatically when you run it; otherwise set
      **b4a.json path** in its analyzer options. L3 runs first and supplies boundaries;
-     L2 stays enabled to decode objects, strings and pool references without
+     Then run L2 to decode objects, strings and pool references without
      repeating L3 boundaries or replacing its names. Rejected imports leave L2
      to provide boundaries as well. **Dart ABI** remains independent.
      **Dart AOT Code Boundaries** is disabled by default for every snapshot format;
@@ -187,7 +187,7 @@ Hashes only suggest a reader: failed hints fall back to complete structural deco
 and conflicting interpretations are rejected. Full version coverage remains under
 development. Pool offsets alone do not identify an object or string at a code use site.
 
-L2 is enabled by default for new Dart imports. Unknown formats, unadapted roots or invalid cluster data are rejected;
+L2 is run explicitly; importing an image does not start whole-image Dart disassembly. Unknown formats, unadapted roots or invalid cluster data are rejected;
 L1 remains independent. A successful run reports function-name, string and pool-slot counts
 and `Root stream fully consumed` in the console. `L2 rejected` means no L2 data was published.
 Repeating the same input is harmless. If published snapshot
@@ -202,8 +202,8 @@ Unresolved indirect destinations remain indirect. L2/L3 metadata can add stronge
 ## b4a integration (L3)
 
 Run **Analysis → One Shot → Dart b4a Import** on a matching ARM64 ELF or Mach-O.
-A sidecar beside the binary enables it by default; saved analyzer choices take precedence.
-Manual One Shot execution remains available. The original file identity and
+A sidecar beside the binary is discovered when you run it, not on import.
+Existing saved analyzer choices take precedence over new defaults. The original file identity and
 loaded RVA checks must agree. Import is transactional; cancellation or failure rolls
 back its changes. The same document is skipped on repeat. A different document
 requires a fresh database so existing user changes are not silently replaced.

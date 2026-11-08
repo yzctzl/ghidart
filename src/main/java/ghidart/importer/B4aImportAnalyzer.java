@@ -11,9 +11,8 @@ import ghidra.program.model.address.AddressSetView;
 import ghidra.program.model.listing.Program;
 import ghidra.util.exception.CancelledException;
 import ghidra.util.task.TaskMonitor;
-import java.nio.file.Files;
 
-/** Use a matching sidecar by default; One Shot and saved analyzer choices remain available. */
+/** Sidecars are discovered when explicitly run; importing a file must stay lightweight. */
 public final class B4aImportAnalyzer extends AbstractAnalyzer {
   private final DartAotAnalyzer source = new DartAotAnalyzer();
 
@@ -27,8 +26,8 @@ public final class B4aImportAnalyzer extends AbstractAnalyzer {
 
   @Override
   public boolean getDefaultEnablement(Program program) {
-    // Ghidra preserves explicit saved choices; this only selects the initial default.
-    return source.findMetadata(program).filter(Files::isRegularFile).isPresent();
+    // Sidecar presence must not silently start whole-image disassembly.
+    return false;
   }
 
   @Override

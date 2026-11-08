@@ -73,7 +73,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
 
   @Override
   public boolean getDefaultEnablement(Program program) {
-    return canAnalyze(program);
+    return false;
   }
 
   @Override

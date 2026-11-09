@@ -116,7 +116,10 @@
         <register name="x15" />
         <register name="x18" />
         <register name="x21" />
-        <register name="x22" />
+        <!-- NULL is ambient global state, not a local save-register input.
+             The native engine otherwise unmaps a native return placeholder
+             initialized from NULL as though it were a disposable register spill.
+             Leave its call effect conservative; do not claim it is killed. -->
         <register name="x26" />
         <register name="x27" />
         <register name="x28" />
@@ -182,6 +185,26 @@
       </killedbycall>
     </prototype>
   </default_proto>
+  <!-- Dart NativeCallInstr wrapper, not C++ RuntimeEntry or arbitrary FFI.
+       Its return lives at the current managed stack top. The recognizer proves
+       that pointer, argc/argv preparation, native entry source and result pop.
+       Runtime calls can refresh pinned globals, so unspecified register effects
+       remain conservative. No synthetic CPU return register is introduced. -->
+  <prototype name="__dart_native_entry" extrapop="0" stackshift="0">
+    <input>
+      <pentry minsize="8" maxsize="8"><register name="x15" /></pentry>
+      <pentry minsize="8" maxsize="8"><register name="x1" /></pentry>
+      <pentry minsize="8" maxsize="8"><register name="x2" /></pentry>
+      <pentry minsize="8" maxsize="8"><register name="x5" /></pentry>
+    </input>
+    <output />
+    <unaffected>
+      <register name="x15" />
+      <register name="x29" />
+      <register name="x30" />
+      <register name="sp" />
+    </unaffected>
+  </prototype>
   <!-- Lowered C++ RuntimeEntry: x0 points to a 32-byte NativeArguments copy.
        The source signature is void(NativeArguments), not void(NativeArguments*).
        This is not the Dart-side trampoline ABI.

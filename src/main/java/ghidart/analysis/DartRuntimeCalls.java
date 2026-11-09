@@ -12,6 +12,10 @@
  * Dynamic objects are accepted only with four surviving field stores and an
  * immediate trap; other unknown locations and metadata conflicts reject. This is
  * not a general FFI convention or a classifier for arbitrary VM stubs.
+ * NativeCallInstr's managed wrapper has a separate bounded contract: a NULL
+ * result placeholder, argc/argv, PP-loaded native entry and matching result load.
+ * Its current x15 is a pointer input, letting the engine model the actual
+ * memory write without a synthetic return register or instruction rewrite.
  */
 package ghidart.analysis;
 
@@ -61,14 +65,15 @@ final class DartRuntimeCalls {
       throws CancelledException, InvalidInputException {
     var objects = new LinkedHashMap<Address, DataType>();
     var locals = new ArrayList<Variable>();
+    var overrides = new ArrayList<Address>();
     SourceType source = function.getSignatureSource();
     try {
-      return recoverCalls(program, function, objects, locals, monitor);
+      return recoverCalls(program, function, objects, locals, overrides, monitor);
     } catch (CancelledException | InvalidInputException | RuntimeException e) {
       // Ghidra nests transactions without savepoints. Aborting an inner one
       // aborts the entire outer analysis, so undo only metadata created here.
       var space = HighFunction.findOverrideSpace(function);
-      for (var address : objects.keySet()) {
+      for (var address : overrides) {
         var symbols = new ArrayList<Symbol>();
         for (var symbol : program.getSymbolTable().getSymbols(address)) {
           if (symbol.getParentNamespace().equals(space)
@@ -87,14 +92,15 @@ final class DartRuntimeCalls {
 
   private static int recoverCalls(Program program, Function function,
       Map<Address, DataType> objects,
-      List<Variable> locals, TaskMonitor monitor)
+      List<Variable> locals, List<Address> overrides, TaskMonitor monitor)
       throws CancelledException, InvalidInputException {
     int recovered = 0;
     var instructions = program.getListing().getInstructions(function.getBody(), true);
     while (instructions.hasNext()) {
       monitor.checkCancelled();
       Instruction call = instructions.next();
-      if (!isRuntimeEntry(program, function, call) && !isTrampolineCall(program, call)) {
+      boolean nativeWrapper = isNativeWrapper(program, function, call);
+      if (!nativeWrapper && !isRuntimeEntry(program, function, call) && !isTrampolineCall(program, call)) {
         continue;
       }
       // Call overrides may carry user/importer knowledge. Never replace one,
@@ -107,6 +113,22 @@ final class DartRuntimeCalls {
             && HighFunctionDBUtil.readOverride(symbol) != null;
       }
       if (overridden) {
+        continue;
+      }
+      if (nativeWrapper) {
+        var manager = program.getDataTypeManager();
+        var signature = new FunctionDefinitionDataType("DartNativeEntry", manager);
+        signature.setCallingConvention("__dart_native_entry");
+        signature.setReturnType(VoidDataType.dataType);
+        var pointer = new PointerDataType(UnsignedLongLongDataType.dataType, 8, manager);
+        signature.setArguments(new ParameterDefinition[] {
+            new ParameterDefinitionImpl("retval", pointer, null),
+            new ParameterDefinitionImpl("argc_tag", UnsignedLongLongDataType.dataType, null),
+            new ParameterDefinitionImpl("argv", pointer, null),
+            new ParameterDefinitionImpl("entry", new PointerDataType(VoidDataType.dataType, 8, manager), null)});
+        overrides.add(call.getAddress());
+        HighFunctionDBUtil.writeOverride(function, call.getAddress(), signature);
+        recovered++;
         continue;
       }
       var signature = new FunctionDefinitionDataType("DartRuntimeEntry", program.getDataTypeManager());
@@ -123,6 +145,7 @@ final class DartRuntimeCalls {
       signature.setArguments(new ParameterDefinition[] {
           new ParameterDefinitionImpl("native_args", arguments, null)});
       objects.put(call.getAddress(), arguments);
+      overrides.add(call.getAddress());
       HighFunctionDBUtil.writeOverride(function, call.getAddress(), signature);
       recovered++;
     }
@@ -577,6 +600,94 @@ final class DartRuntimeCalls {
     return false;
   }
 
+  /** NativeCallInstr pushes a NULL result, prepares argc/argv and a PP-loaded
+   * native entry, then reads the result from that slot. Older code pops and drops argc
+   * arguments; newer code reuses a reserved outgoing area. Match
+   * these independent data-flow facts, not a wrapper address or Thread layout.
+   * SDK: compiler/backend/il_arm64.cc, NativeCallInstr::EmitNativeCode (2.10+).
+   * Flag bits above argc's low 24 bits are opaque and have changed over time.
+   */
+  private static boolean isNativeWrapper(Program program, Function function, Instruction call) {
+    if (!call.getFlowType().isCall() || call.getFallThrough() == null) return false;
+    // Reject ordinary calls before scanning a preparation block. NativeCallInstr
+    // first reads the result, before any optional argument-area release.
+    if (!readsNativeResult(program, function, call, 0)) return false;
+    var block = blockBefore(program, function.getBody(), call);
+    var setup = block.subList(0, block.size() - 1);
+    Long entry = poolLoad(program, setup, "x5");
+    if (entry == null || entry < 0 || (entry & 7) != 0) return false;
+    var values = new HashMap<Varnode, Value>();
+    var stores = new HashMap<Value, Value>();
+    try {
+      for (var instruction : setup) {
+        values.keySet().removeIf(Varnode::isUnique);
+        for (var op : instruction.getPcode()) {
+          if (DartPcodeInjectLibrary.isPoolIdentity(program, op)) continue;
+          if (op.getOpcode() == PcodeOp.CALLOTHER) return false;
+          if (op.getOpcode() == PcodeOp.STORE) {
+            Value address = read(values, op.getInput(1));
+            if (address == null || op.getInput(2).getSize() != 8) return false;
+            stores.put(address, read(values, op.getInput(2)));
+          } else if (op.getOutput() != null) {
+            write(values, op.getOutput(), evaluate(values, op));
+          } else return false;
+        }
+      }
+      Value argc = read(values, register(program, "x1"));
+      if (argc == null || !argc.terms().isEmpty()) return false;
+      long count = argc.constant() & 0xffffff;
+      Value stack = read(values, register(program, "x15"));
+      if (stack == null || !Value.atom(register(program, "x22")).equals(stores.get(stack))) return false;
+      if (!stack.add(Value.constant(count * 8)).equals(read(values, register(program, "x2")))) return false;
+      return readsNativeResult(program, function, call, count);
+    } catch (ArithmeticException e) {
+      return false;
+    }
+  }
+
+  private static boolean readsNativeResult(Program program, Function function, Instruction call, long count) {
+    var values = new HashMap<Varnode, Value>();
+    Value stack = Value.atom(register(program, "x15"));
+    boolean result = false;
+    Instruction cursor = call;
+    for (int i = 0; i < 2; i++) {
+      cursor = program.getListing().getInstructionAt(cursor.getFallThrough());
+      if (cursor == null || !function.getBody().contains(cursor.getAddress())
+          || cursor.getFlowType().isCall() || cursor.getFlowType().isJump()
+          || cursor.getFlowType().isTerminal()) return false;
+      for (var refs = program.getReferenceManager().getReferencesTo(cursor.getAddress()); refs.hasNext();) {
+        if (refs.next().getReferenceType().isFlow()) return false;
+      }
+      values.keySet().removeIf(Varnode::isUnique);
+      for (var op : cursor.getPcode()) {
+        if (DartPcodeInjectLibrary.isPoolIdentity(program, op)) continue;
+        if (op.getOpcode() == PcodeOp.LOAD) {
+          if (!register(program, "x0").equals(op.getOutput())
+              || !stack.equals(read(values, op.getInput(1)))) return false;
+          result = true;
+        } else if (op.getOutput() == null || op.getOpcode() == PcodeOp.CALLOTHER) return false;
+        write(values, op.getOutput(), evaluate(values, op));
+      }
+      Value after = read(values, register(program, "x15"));
+      // A fixed outgoing area stays allocated until the epilogue. The older
+      // push/pop form releases the result plus exactly argc argument words.
+      if (result && (i == 0 && stack.equals(after)
+          || stack.add(Value.constant((count + 1) * 8)).equals(after))) return true;
+      if (cursor.getFallThrough() == null) return false;
+    }
+    return false;
+  }
+
+  /** A subregister write invalidates overlapping full-register expressions. */
+  private static void write(Map<Varnode, Value> values, Varnode output, Value value) {
+    for (var existing : List.copyOf(values.keySet())) {
+      if (existing.getAddress().getAddressSpace().equals(output.getAddress().getAddressSpace())
+          && existing.getOffset() < output.getOffset() + output.getSize()
+          && output.getOffset() < existing.getOffset() + existing.getSize()) values.put(existing, null);
+    }
+    values.put(output, value);
+  }
+
   private static boolean isRuntimeEntry(Program program, Function function, Instruction call) {
     if (!callsRegister(program, call, "x5")) {
       return false;
@@ -718,6 +829,16 @@ final class DartRuntimeCalls {
     return switch (op.getOpcode()) {
       case PcodeOp.COPY -> left;
       case PcodeOp.INT_ADD -> left.add(read(values, op.getInput(1)));
+      case PcodeOp.INT_SUB -> {
+        Value right = read(values, op.getInput(1));
+        yield right == null ? null : left.add(right.scale(-1));
+      }
+      case PcodeOp.INT_AND, PcodeOp.INT_OR -> {
+        Value right = read(values, op.getInput(1));
+        yield !left.terms().isEmpty() || right == null || !right.terms().isEmpty() ? null
+            : Value.constant(op.getOpcode() == PcodeOp.INT_AND
+                ? left.constant() & right.constant() : left.constant() | right.constant());
+      }
       case PcodeOp.INT_LEFT -> op.getInput(1).isConstant() && op.getInput(1).getOffset() < 63
           ? left.scale(1L << op.getInput(1).getOffset()) : null;
       default -> null;

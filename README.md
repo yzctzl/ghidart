@@ -10,7 +10,7 @@ Features:
 
 - Dart managed ABI: X15 stack, CPU/FPU/stack arguments, returns and register preservation.
 - Independent machine-code function discovery, control-flow analysis and call-chain argument/return recovery.
-- RuntimeEntry, write-barrier, stack-check and Mint helper contracts recovered from supported machine-code patterns.
+- RuntimeEntry, native-wrapper return slots, write-barrier, stack-check and Mint helper contracts recovered from supported machine-code patterns.
 - Clearer compressed Smi extraction using standard sign-extension operations.
 - Optional parameter access shapes inferred from machine-code memory uses, without snapshot layouts.
 - PP-relative access and constant-use indexing, with references for proved concrete addresses and calls.

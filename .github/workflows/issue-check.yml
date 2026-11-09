@@ -1,15 +1,22 @@
 name: Check issue information
+run-name: Check issue #${{ github.event.issue.number || inputs.issue_number }}
 
 on:
   issues:
     types: [opened, edited, reopened, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to recheck
+        type: number
+        required: true
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: issue-information-${{ github.event.issue.number }}
+  group: issue-information-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
@@ -22,11 +29,15 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
       - uses: actions/github-script@v9
+        env:
+          REPORT_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
         with:
           script: |
             const check = require('./.github/scripts/check-issue.cjs');
+            const number = Number(process.env.REPORT_NUMBER);
+            if (!Number.isSafeInteger(number) || number <= 0) throw new Error('Invalid issue number');
             // Read the latest report: queued edits may have changed its contents.
             const {data: issue} = await github.rest.issues.get({
-              ...context.repo, issue_number: context.issue.number
+              ...context.repo, issue_number: number
             });
             await check({github, context: {repo: context.repo, payload: {...context.payload, issue}}});

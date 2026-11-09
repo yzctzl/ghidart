@@ -94,6 +94,7 @@ public final class DartClusterParser {
     STRING,
     NONE,
     DOUBLE,
+    SIMD128,
     CODE,
     OBJECT_POOL,
     ARRAY,
@@ -2018,11 +2019,14 @@ public final class DartClusterParser {
           .withLeadingBool(profile.preCanonicalSplit);
     }
     if (cid == ct.regExp) {
-      int numRefs = profile.tagStyle == DartVersionProfile.TagStyle.CID_SHIFT_1 ? 10 : 6;
+      int numRefs = profile.regExpNumRefs;
       return new FillSpec(
           FillKind.REFS,
           numRefs,
-          new ScalarOp[] {ScalarOp.TAGGED_32, ScalarOp.TAGGED_32, ScalarOp.INT8},
+          new ScalarOp[] {
+            ScalarOp.TAGGED_32, ScalarOp.TAGGED_32,
+            profile.regExpWideFlags ? ScalarOp.TAGGED_32 : ScalarOp.INT8
+          },
           -1,
           -1);
     }
@@ -2090,7 +2094,8 @@ public final class DartClusterParser {
       return new FillSpec(FillKind.UNKNOWN);
     }
     if (cid == ct.stackTrace) {
-      return new FillSpec(FillKind.REFS, 2, null, -1, -1);
+      // async_link, code_array, pc_offset_array (SDK raw_object.h).
+      return new FillSpec(FillKind.REFS, 3, null, -1, -1);
     }
     if (cid == ct.sendPort) {
       return new FillSpec(
@@ -2115,7 +2120,9 @@ public final class DartClusterParser {
       return new FillSpec(FillKind.REFS, 2, null, -1, -1);
     }
     if (ct.weakSerializationReference != 0 && cid == ct.weakSerializationReference) {
-      return new FillSpec(FillKind.REFS, 1, null, -1, -1);
+      // Legacy WSRs retain a target CID, not a reference to the dropped object.
+      // Later SDKs replace WSR identities before serialization (Alloc count zero).
+      return new FillSpec(FillKind.REFS, 0, new ScalarOp[] {ScalarOp.TAGGED_32}, -1, -1);
     }
     if (ct.sentinel != 0 && cid == ct.sentinel) {
       return new FillSpec(FillKind.SENTINEL);
@@ -2134,19 +2141,8 @@ public final class DartClusterParser {
     if (cid == ct.doubleCid) {
       return new FillSpec(FillKind.DOUBLE);
     }
-    if (cid == ct.float32x4 || cid == ct.int32x4) {
-      return new FillSpec(
-          FillKind.REFS,
-          0,
-          new ScalarOp[] {
-            ScalarOp.TAGGED_32, ScalarOp.TAGGED_32, ScalarOp.TAGGED_32, ScalarOp.TAGGED_32
-          },
-          -1,
-          -1);
-    }
-    if (cid == ct.float64x2) {
-      return new FillSpec(
-          FillKind.REFS, 0, new ScalarOp[] {ScalarOp.TAGGED_64, ScalarOp.TAGGED_64}, -1, -1);
+    if (cid == ct.float32x4 || cid == ct.int32x4 || cid == ct.float64x2) {
+      return new FillSpec(FillKind.SIMD128);
     }
     if (cid == ct.code) {
       return new FillSpec(FillKind.CODE);
@@ -2272,6 +2268,18 @@ public final class DartClusterParser {
               new long[] {bits, canonical}, -1, 0));
         }
         break;
+      case SIMD128:
+        // SDK Simd128SerializationCluster::WriteFill writes 16 raw bytes,
+        // not VLE-encoded lanes. Keep both words bit-exact (including NaNs)
+        // and retain the payload span for consumers of all three SIMD CIDs.
+        for (long i = 0; i < cm.count; i++) {
+          int offset = s.position();
+          long low = s.readInt64();
+          long high = s.readInt64();
+          objects.add(new ObjectData(cm.startRef + (int) i, cm.cid, new int[0],
+              new long[] {low, high}, offset, 16));
+        }
+        break;
       case CODE:
         readFillCode(s, cm, profile, instrIdx[0], runningTextOffset, codes, objects);
         instrIdx[0] += (int) cm.mainCount;
@@ -2285,6 +2293,7 @@ public final class DartClusterParser {
       case WEAK_ARRAY:
         for (long i = 0; i < cm.count; i++) {
           long len = s.readUnsigned();
+          checkAllocLength(cm, (int) i, len);
           objects.add(new ObjectData(cm.startRef + (int) i, cm.cid,
               readReferences(s, len, u), new long[] {len}, -1, 0));
         }
@@ -2293,6 +2302,7 @@ public final class DartClusterParser {
         int elemSize = typedDataElementSize(cm.cid, profile.cids);
         for (long i = 0; i < cm.count; i++) {
           long len = s.readUnsigned();
+          checkAllocLength(cm, (int) i, len);
           int canonical = profile.preCanonicalSplit ? s.readUint8() : -1;
           int offset = s.position();
           int bytes = payloadBytes(s, len, elemSize);
@@ -2320,6 +2330,7 @@ public final class DartClusterParser {
       case VARIABLE_CLOSURE:
         for (long i = 0; i < cm.count; i++) {
           long length = readCount(s);
+          checkAllocLength(cm, (int) i, length);
           objects.add(new ObjectData(cm.startRef + (int) i, cm.cid,
               readReferences(s, length + 3, u), new long[] {length}, -1, 0));
         }
@@ -2327,6 +2338,7 @@ public final class DartClusterParser {
       case LOCAL_VARIABLES:
         for (long i = 0; i < cm.count; i++) {
           long length = readCount(s);
+          checkAllocLength(cm, (int) i, length);
           int[] refs = readReferences(s, length, u);
           if (length > s.remaining() / 5) throw new IOException("truncated local variable descriptors");
           long[] scalars = new long[Math.toIntExact(1 + 5 * length)];
@@ -2342,6 +2354,7 @@ public final class DartClusterParser {
         for (long i = 0; i < cm.count; i++) {
           long raw = s.readUnsigned();
           long len = u ? raw : (raw >>> 1);
+          checkAllocLength(cm, (int) i, len);
           int handledTypes = (int) s.readRef(u);
           if (raw < 0 || len > s.remaining() / 5) throw new IOException("invalid exception handler length");
           long[] scalars = new long[Math.toIntExact(1 + len * 5)];
@@ -2364,6 +2377,7 @@ public final class DartClusterParser {
       case CONTEXT:
         for (long i = 0; i < cm.count; i++) {
           long len = s.readUnsigned();
+          checkAllocLength(cm, (int) i, len);
           objects.add(new ObjectData(cm.startRef + (int) i, cm.cid,
               readReferences(s, len + 1, u), new long[] {len}, -1, 0));
         }
@@ -2385,6 +2399,7 @@ public final class DartClusterParser {
         for (long i = 0; i < cm.count; i++) {
           long shape = s.readUnsigned();
           long numFields = shape & 0xffffL;
+          checkAllocLength(cm, (int) i, numFields);
           objects.add(new ObjectData(cm.startRef + (int) i, cm.cid,
               readReferences(s, numFields, u), new long[] {shape}, -1, 0));
         }
@@ -2392,9 +2407,10 @@ public final class DartClusterParser {
       case CONTEXT_SCOPE:
         for (long i = 0; i < cm.count; i++) {
           long len = s.readUnsigned();
+          checkAllocLength(cm, (int) i, len);
           int implicit = s.readUint8();
           objects.add(new ObjectData(cm.startRef + (int) i, cm.cid,
-              readReferences(s, 7L * len, u), new long[] {len, implicit}, -1, 0));
+              readReferences(s, (long) profile.contextScopeVariableRefs * len, u), new long[] {len, implicit}, -1, 0));
         }
         break;
       default:
@@ -2415,6 +2431,7 @@ public final class DartClusterParser {
     for (int i = 0; i < cm.count; i++) {
       int prefixOffset = s.position();
       long encoded = s.readUnsigned();
+      checkAllocLength(cm, i, encoded);
       int length;
       boolean isTwoByte;
       if (oldFormat) {
@@ -2915,6 +2932,7 @@ public final class DartClusterParser {
       int idx = 0;
       int poolRef = cm.startRef + (int) i;
       long length = readCount(s);
+      checkAllocLength(cm, (int) i, length);
       objects.add(new ObjectData(poolRef, cm.cid, new int[0], new long[] {length}, -1, 0));
       for (long j = 0; j < length; j++) {
         int entryBits = s.readUint8();
@@ -2979,10 +2997,18 @@ public final class DartClusterParser {
       DartVersionProfile profile, List<ObjectData> objects) throws IOException {
     for (int i = 0; i < cm.count; i++) {
       long length = profile.oldArrayFill ? cm.lengths[i] : s.readUnsigned();
+      checkAllocLength(cm, i, length);
       int canonical = profile.preCanonicalSplit && !profile.oldArrayFill ? s.readUint8() : -1;
       int[] refs = readReferences(s, length + 1, u);
       objects.add(new ObjectData(cm.startRef + i, cm.cid, refs,
           new long[] {length, canonical}, -1, 0));
+    }
+  }
+
+  /** Alloc reserves each variable-size object; Fill must describe that same extent. */
+  private static void checkAllocLength(ClusterMeta cm, int index, long length) throws IOException {
+    if (cm.lengths == null || index >= cm.lengths.length || cm.lengths[index] != length) {
+      throw new IOException("Alloc/Fill length mismatch for CID " + cm.cid + " object " + index);
     }
   }
 
@@ -3000,6 +3026,7 @@ public final class DartClusterParser {
       DartVersionProfile profile, List<ObjectData> objects) throws IOException {
     for (int i = 0; i < cm.count; i++) {
       long length = profile.oldTypeArgsFill ? cm.lengths[i] : s.readUnsigned();
+      checkAllocLength(cm, i, length);
       if (profile.oldTypeArgsFill) {
         int[] refs = readReferences(s, length + 1, u);
         objects.add(new ObjectData(cm.startRef + i, cm.cid, refs,

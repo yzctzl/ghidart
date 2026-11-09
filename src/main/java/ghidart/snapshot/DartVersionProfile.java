@@ -105,6 +105,9 @@ public final class DartVersionProfile {
   public final boolean unitPoolPatches;
   public final boolean scriptHasLineCol;
   public final boolean scriptHasFlags;
+  public final int contextScopeVariableRefs;
+  public final int regExpNumRefs;
+  public final boolean regExpWideFlags;
 
   private DartVersionProfile(Builder b) {
     this.dartVersion = b.dartVersion;
@@ -153,6 +156,9 @@ public final class DartVersionProfile {
     this.unitPoolPatches = b.unitPoolPatches;
     this.scriptHasLineCol = b.scriptHasLineCol;
     this.scriptHasFlags = b.scriptHasFlags;
+    this.contextScopeVariableRefs = b.contextScopeVariableRefs;
+    this.regExpNumRefs = b.regExpNumRefs;
+    this.regExpWideFlags = b.regExpWideFlags;
   }
 
   public DartVersionProfile withCompressedPointers(boolean compressed) {
@@ -212,6 +218,9 @@ public final class DartVersionProfile {
     b.unitPoolPatches = this.unitPoolPatches;
     b.scriptHasLineCol = this.scriptHasLineCol;
     b.scriptHasFlags = this.scriptHasFlags;
+    b.contextScopeVariableRefs = this.contextScopeVariableRefs;
+    b.regExpNumRefs = this.regExpNumRefs;
+    b.regExpWideFlags = this.regExpWideFlags;
     return b;
   }
 
@@ -263,6 +272,9 @@ public final class DartVersionProfile {
     boolean unitPoolPatches = false;
     boolean scriptHasLineCol = false;
     boolean scriptHasFlags = false;
+    int contextScopeVariableRefs = 8;
+    int regExpNumRefs = 11;
+    boolean regExpWideFlags = false;
 
     public DartVersionProfile build() {
       return new DartVersionProfile(this);
@@ -388,6 +400,8 @@ public final class DartVersionProfile {
     layout.codeStateBitsAtEnd = false;
     layout.closureDataNumRefs = 3;
     layout.namespaceNumRefs = 1;
+    // num_bracket_expressions leaves RegExp's pointer range in 2.13.
+    layout.regExpNumRefs = 10;
     layout.unitPoolPatches = true;
     layout.cids = DartClassId.CIDS_V2_13;
     layout.serializedCanonicalSets = true;
@@ -446,6 +460,8 @@ public final class DartVersionProfile {
     // SDK 3.0.5: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
     layout.cids = DartClassId.CIDS_V3_0;
     layout.typeParamByteScalars = false;
+    // ContextScope::VariableDesc adds kernel_offset; type/value share a union slot.
+    layout.contextScopeVariableRefs = 9;
     register("3.0.5", layout);
 
     // SDK 3.1.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
@@ -456,6 +472,8 @@ public final class DartVersionProfile {
     // SDK 3.2.5: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
     layout.preV32Format = false;
     layout.poolTypeSwapped = true;
+    // The type/value union becomes separate type and cid slots.
+    layout.contextScopeVariableRefs = 10;
     register("3.2.5", layout);
 
     // SDK 3.3.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
@@ -466,6 +484,8 @@ public final class DartVersionProfile {
     // SDK 3.4.3: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
     layout.tagStyle = TagStyle.OBJECT_HEADER;
     layout.cids = DartClassId.CIDS_V3_4;
+    // External-string RegExp entries are no longer serialized.
+    layout.regExpNumRefs = 6;
     register("3.4.3", layout);
 
     // SDK 3.5.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
@@ -501,6 +521,8 @@ public final class DartVersionProfile {
     register("3.11.5", layout);
 
     // SDK 3.12.0: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).
+    // RegExp replaces int8 type_flags with uint32 flags (Raw<4>: signed VLE bits).
+    layout.regExpWideFlags = true;
     register("3.12.0", layout);
 
     // SDK 3.13.3: vm/app_snapshot.cc (older SDKs: clustered_snapshot.cc).

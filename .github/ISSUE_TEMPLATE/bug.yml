@@ -1,0 +1,33 @@
+name: Bug report
+description: Report an analysis, display or compatibility problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and reproduction
+      description: Required to reproduce the problem. What did you do, what happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: ghidart version/commit, Ghidra version, host OS, target OS/architecture and Dart/Flutter version (if known).
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample
+      description: Attach the app/package or a download link. Alternatively provide the AOT binary (libapp.so/App) and matching b4a.json when relevant. A binary attachment/download link is required to reproduce the problem; screenshots alone are insufficient. Share only files you may redistribute.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Console log and affected addresses
+      description: Include the complete Dart analysis messages and a failing function/address when available.
+    validations:
+      required: true

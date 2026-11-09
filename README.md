@@ -30,8 +30,9 @@ as exported evidence, not translated into physical ABI or replacement P-code.
 ## Installation
 
 Prebuilt ZIPs are available on [Releases](https://github.com/yzctzl/ghidart/releases).
-Use the Ghidra version stated in the release. Tag pushes build against the latest
-stable Ghidra release; manual workflow runs can select a specific Ghidra release tag.
+Use the Ghidra version stated in the release. Tag pushes build against the validated
+Ghidra release in [compatibility.json](.github/compatibility.json); manual workflow
+runs can select `latest` or a specific Ghidra release tag.
 A successful build checks compilation and packaging, not full runtime compatibility.
 
 Requires Ghidra 12.2 PUBLIC and Java 25. A Gradle Wrapper is included.
@@ -397,3 +398,28 @@ for licensing and template attribution.
 English is the default documentation language. Keep this README and
 [README.zh-CN.md](README.zh-CN.md) synchronized whenever either changes.
 Interface, sample and test documentation is maintained in English only.
+
+## GitHub maintenance
+
+Pull requests and pushes to `main` compile and package against the validated Ghidra
+version. This build check does not run the local semantic regression suite.
+A weekly/manual [Dart stable watch](.github/workflows/upstream-watch.yml) checks only
+small official version metadata and maintains one update Issue; it downloads no SDK
+and invokes no AI agent. Beta/dev releases are outside maintenance scope. Update
+[compatibility.json](.github/compatibility.json) only after validating a new stable
+version. Actions dependencies receive grouped monthly Dependabot updates.
+Automated jobs use standard hosted runners and run only in public repositories.
+
+[Bug reports and binary-analysis support requests](https://github.com/yzctzl/ghidart/issues/new/choose) require the environment,
+app/package or AOT binary download link, reproduction steps and error/Console output.
+Incomplete reports receive a friendly reminder and a temporary `invalid` label,
+without automatic closure. Edit the issue body to complete the required information;
+the check runs again and removes its own label when complete.
+
+Feature suggestions, discussions and general questions do not require these materials.
+The check applies to the Bug/Analysis support forms and issues labeled `bug` or
+`needs-reproduction`. Maintainers can exempt an issue with `enhancement` or `question`;
+reclassification removes only the temporary label owned by this check.
+
+The [label setup](.github/workflows/labels.yml) creates missing report labels after
+its first push to `main`, or on manual execution; existing labels are preserved.

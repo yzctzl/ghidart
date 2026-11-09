@@ -27,8 +27,9 @@ b4a 打印的类型和 IL 作为导出证据显示，不直接转换为物理 AB
 ## 安装
 
 预编译 ZIP 可从 [Releases](https://github.com/yzctzl/ghidart/releases) 下载，
-请使用发布说明指定的 Ghidra 版本。推送 tag 时自动使用最新稳定版 Ghidra 构建；
-手动运行工作流可指定 Ghidra 发布 tag。构建成功仅代表编译与打包通过，不代表完整运行验收。
+请使用发布说明指定的 Ghidra 版本。推送 tag 时使用
+[compatibility.json](.github/compatibility.json) 中已验证的 Ghidra 版本；
+手动运行工作流可指定 `latest` 或具体 Ghidra 发布 tag。构建成功仅代表编译与打包通过，不代表完整运行验收。
 
 需要 Ghidra 12.2 PUBLIC、Java 25；项目自带 Gradle Wrapper。
 
@@ -315,3 +316,22 @@ GUI 单独检查菜单、导航及保存重开。反编译成功本身不等于�
 
 文档默认使用英文。修改本 README 或 [README.md](README.md) 时，必须同步更新另一版本。
 接口、样例和测试说明仅维护英文。
+
+## GitHub 维护
+
+PR 和 `main` 分支推送会针对已验证的 Ghidra 版本编译、打包；此检查不运行本地语义回归。
+每周或手动运行的 [Dart stable 监控](.github/workflows/upstream-watch.yml) 只读取官方小型版本元数据，
+维护一条更新 Issue，不下载 SDK、不调用 AI Agent。beta/dev 不在维护范围内。
+新版 stable 实测验收后，才更新 [compatibility.json](.github/compatibility.json)。
+Dependabot 每月分组提交 Actions 依赖更新。自动任务使用标准托管 runner，仅在公开仓库中运行。
+
+[Bug 报告及具体二进制分析求助](https://github.com/yzctzl/ghidart/issues/new/choose)必须提供环境、安装包或 AOT 二进制下载链接、
+复现步骤和错误／Console 日志，否则我们无法复现和定位。信息不全时会温和提醒并临时标记 `invalid`，
+不会自动关闭。请编辑 Issue 正文补全信息；自动复查通过后会解除本检查添加的标记。
+
+功能建议、讨论和一般咨询不要求这些材料。检查仅适用于 Bug／Analysis support 表单，
+以及带 `bug` 或 `needs-reproduction` 标签的 Issue。维护者可用 `enhancement` 或 `question`
+标签豁免；重新分类时只解除本检查添加的临时标记。
+
+[标签初始化](.github/workflows/labels.yml)首次推送到 `main` 或手动运行时创建缺少的报告标签，
+保留仓库中已有的标签。

@@ -1,0 +1,11 @@
+name: Feature or improvement
+description: Suggest a capability or workflow improvement; no binary or error log is required.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal and suggestion
+      description: What would you like to accomplish, and how should it work?
+    validations:
+      required: true

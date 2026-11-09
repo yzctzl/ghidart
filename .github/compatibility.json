@@ -1,0 +1,7 @@
+{
+  "dart_stable": "3.13.7",
+  "dart_revision": "416e33b0ffaef062a60ec966bb8c82ed2b83f128",
+  "ghidra_tag": "Ghidra_12.2_build",
+  "validated_commit": "e5543747c4d1c357405b2714187c318fad92ad74",
+  "evidence": "ARM64 headless acceptance: 42 ELF fixtures across 21 selected versions; 2 Mach-O fixtures. Selected decompilation and character XREF checks passed; literal delivery has recorded gaps. This is not complete semantic validation."
+}

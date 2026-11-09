@@ -44,7 +44,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '25'
-      - name: Resolve Ghidra release
+      - name: Resolve official build tools
         id: ghidra
         uses: actions/github-script@v9
         env:
@@ -66,11 +66,26 @@ jobs:
             core.setOutput('api_url', asset.url);
             core.setOutput('digest', asset.digest || '');
             core.notice(`Building against ${release.tag_name}: ${asset.name}`);
+            const properties = require('node:fs').readFileSync('gradle/wrapper/gradle-wrapper.properties', 'utf8');
+            const gradle = properties.match(/gradle-([0-9.]+)-bin\.zip/);
+            const checksum = properties.match(/^distributionSha256Sum=([0-9a-f]{64})$/m);
+            if (!gradle || !checksum) throw new Error('Expected a pinned Gradle binary and SHA-256');
+            const {data: distribution} = await github.rest.repos.getReleaseByTag({
+              owner: 'gradle', repo: 'gradle-distributions', tag: `v${gradle[1]}`
+            });
+            const binary = distribution.assets.find(a => a.name === `gradle-${gradle[1]}-bin.zip`);
+            if (!binary) throw new Error('Missing official Gradle distribution');
+            core.setOutput('gradle_url', binary.url);
+            core.setOutput('gradle_sha256', checksum[1]);
+            core.setOutput('gradle_version', gradle[1]);
       - name: Download Ghidra
         env:
           GHIDRA_URL: ${{ steps.ghidra.outputs.url }}
           GHIDRA_DIGEST: ${{ steps.ghidra.outputs.digest }}
           GHIDRA_API_URL: ${{ steps.ghidra.outputs.api_url }}
+          GRADLE_API_URL: ${{ steps.ghidra.outputs.gradle_url }}
+          GRADLE_SHA256: ${{ steps.ghidra.outputs.gradle_sha256 }}
+          GRADLE_VERSION: ${{ steps.ghidra.outputs.gradle_version }}
           GH_TOKEN: ${{ github.token }}
         run: |
           if ! curl --fail --location --retry 3 --connect-timeout 30 --max-time 600 \
@@ -88,12 +103,20 @@ jobs:
           ghidra_dir=$(find "$RUNNER_TEMP/ghidra" -mindepth 1 -maxdepth 1 -type d -name 'ghidra_*_PUBLIC')
           test -f "$ghidra_dir/support/buildExtension.gradle"
           echo "GHIDRA_INSTALL_DIR=$ghidra_dir" >> "$GITHUB_ENV"
+          # Bootstrap the exact Wrapper version via its official asset API, with
+          # the Wrapper's committed checksum, avoiding the failing redirect path.
+          curl --fail --location --retry 3 --connect-timeout 30 --max-time 600 \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+            "$GRADLE_API_URL" -o "$RUNNER_TEMP/gradle.zip"
+          echo "$GRADLE_SHA256  $RUNNER_TEMP/gradle.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP/gradle"
+          echo "GRADLE_BINARY=$RUNNER_TEMP/gradle/gradle-$GRADLE_VERSION/bin/gradle" >> "$GITHUB_ENV"
       - name: Check maintenance script syntax
         run: |
           node --check .github/scripts/watch-dart.cjs
           node --check .github/scripts/check-issue.cjs
       - name: Build extension
-        run: ./gradlew --no-daemon buildExtension
+        run: '"$GRADLE_BINARY" --no-daemon buildExtension'
       - name: Retain build artifact
         uses: actions/upload-artifact@v7
         with:

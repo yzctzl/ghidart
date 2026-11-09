@@ -1,5 +1,5 @@
 name: Check issue information
-run-name: Check issue #${{ github.event.issue.number || inputs.issue_number }}
+run-name: 'Check issue #${{ github.event.issue.number || inputs.issue_number }}'
 
 on:
   issues:

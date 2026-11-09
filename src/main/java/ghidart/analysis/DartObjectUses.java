@@ -255,8 +255,8 @@ final class DartObjectUses {
     return index;
   }
 
-  /** L2 root identities can supplement helper ABI when an older SDK's body
-   * falls outside L1's bounded codegen recognizers. No names from the symbol
+  /** L2 root identities and retained Type owners supplement helper ABI when
+   * a stub falls outside L1's bounded codegen recognizers. No names from the symbol
    * tree or Thread offsets participate, and L1 needs none of these facts.
    */
   static Map<Address, DartThreadCalls.Contract> helperContracts(Program program,
@@ -277,6 +277,21 @@ final class DartObjectUses {
       for (var code : ghidart.snapshot.DartObjectGraph.to(program, target)) {
         String raw = facts.getString(code.getFromAddress());
         if (raw == null || !raw.contains("\"kind\":\"Code\"")) continue;
+        // A retained Type owns its generated check stub. This is structural
+        // evidence, not a name prefix; ordinary Function-owned code (including
+        // InstanceOf methods) must retain its own physical result convention.
+        var object = JsonParser.parseString(raw).getAsJsonObject().getAsJsonObject("object");
+        if (object != null) {
+          Address owner = relative(code.getFromAddress(), object.get("ownerRef").getAsInt(),
+              object.get("refId").getAsInt());
+          String ownerFact = facts.getString(owner);
+          if (ownerFact != null && JsonParser.parseString(ownerFact).getAsJsonObject().has("type")) {
+            var contract = new DartThreadCalls.Contract("__dart_type_test",
+                List.of("x0", "x1", "x2", "x3", "x8"), false, false, 0);
+            if (agreed != null && !agreed.equals(contract)) conflict = true;
+            agreed = contract;
+          }
+        }
         for (var root : ghidart.snapshot.DartObjectGraph.to(program, code.getFromAddress())) {
           raw = facts.getString(root.getFromAddress());
           if (raw == null || !raw.contains("\"kind\":\"RootReference\"")) continue;

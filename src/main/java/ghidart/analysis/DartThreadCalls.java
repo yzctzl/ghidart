@@ -135,16 +135,20 @@ final class DartThreadCalls {
         var arguments = contract.inputs();
         boolean mint = contract.result();
         try {
-          String xml = prototype(name, arguments, mint, contract.array(), contract.savedFpu());
-          var prior = ghidra.program.database.SpecExtension.getCompilerSpecExtension(
-              program, ghidra.program.database.SpecExtension.Type.PROTOTYPE_MODEL, name);
-          if (prior != null && !prior.equals(xml)) {
-            log.appendMsg("Dart ABI", "Existing helper convention differs: " + name);
-            continue;
-          }
-          if (prior == null) {
-            new ghidra.program.database.SpecExtension(program).addReplaceCompilerSpecExtension(
-                xml, monitor);
+          // TypeTestABI has a conservative static model: the VM's evolving
+          // scratch set cannot use a guard's all-register preservation model.
+          if (!name.equals("__dart_type_test")) {
+            String xml = prototype(name, arguments, mint, contract.array(), contract.savedFpu());
+            var prior = ghidra.program.database.SpecExtension.getCompilerSpecExtension(
+                program, ghidra.program.database.SpecExtension.Type.PROTOTYPE_MODEL, name);
+            if (prior != null && !prior.equals(xml)) {
+              log.appendMsg("Dart ABI", "Existing helper convention differs: " + name);
+              continue;
+            }
+            if (prior == null) {
+              new ghidra.program.database.SpecExtension(program).addReplaceCompilerSpecExtension(
+                  xml, monitor);
+            }
           }
           var signature = new ghidra.program.model.data.FunctionDefinitionDataType(
               name, program.getDataTypeManager());

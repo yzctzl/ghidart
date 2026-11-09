@@ -205,6 +205,30 @@
       <register name="sp" />
     </unaffected>
   </prototype>
+  <!-- Type-owned Code is a TypeTestingStub, not a Dart method or InstanceOf.
+       TypeTestABI (2.10+): successful checks preserve the instance and the
+       destination/instantiation inputs; failure throws. Other register effects
+       remain unknown instead of freezing the SDK's evolving scratch set. -->
+  <prototype name="__dart_type_test" extrapop="0" stackshift="0">
+    <input>
+      <pentry minsize="8" maxsize="8"><register name="x0" /></pentry>
+      <pentry minsize="8" maxsize="8"><register name="x1" /></pentry>
+      <pentry minsize="8" maxsize="8"><register name="x2" /></pentry>
+      <pentry minsize="8" maxsize="8"><register name="x3" /></pentry>
+      <pentry minsize="8" maxsize="8"><register name="x8" /></pentry>
+    </input>
+    <output />
+    <unaffected>
+      <register name="x0" />
+      <register name="x1" />
+      <register name="x2" />
+      <register name="x8" />
+      <register name="x15" />
+      <register name="x29" />
+      <register name="x30" />
+      <register name="sp" />
+    </unaffected>
+  </prototype>
   <!-- Lowered C++ RuntimeEntry: x0 points to a 32-byte NativeArguments copy.
        The source signature is void(NativeArguments), not void(NativeArguments*).
        This is not the Dart-side trampoline ABI.

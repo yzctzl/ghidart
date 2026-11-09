@@ -12,6 +12,7 @@ Features:
 - Independent machine-code function discovery, control-flow analysis and call-chain argument/return recovery.
 - RuntimeEntry, native-wrapper return slots, write-barrier, stack-check and Mint helper contracts recovered from supported machine-code patterns.
 - Clearer compressed Smi extraction using standard sign-extension operations.
+- L2 Type-owned check stubs retain the checked value and use their own physical ABI.
 - Optional parameter access shapes inferred from machine-code memory uses, without snapshot layouts.
 - PP-relative access and constant-use indexing, with references for proved concrete addresses and calls.
 - Finite indirect-jump recovery through native switch/SSA analysis and complete CFG checks.

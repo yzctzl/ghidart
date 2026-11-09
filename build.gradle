@@ -129,7 +129,7 @@ if (file('tests/VerifyB4a.java').isFile()) {
 tasks.named('buildExtension') {
     includeEmptyDirs = false
     dependsOn verifySources, prepareAarch64Language, prepareDartCompilerSpecs, compileDartLanguage
-    exclude 'data/languages/AARCH64.sla', 'samples/**', 'tools/**', 'tests/**', 'local/**', '.git/**', '.gitignore', '.vscode/**',
+    exclude 'data/languages/AARCH64.sla', 'samples/**', 'tools/**', 'tests/**', 'local/**', '.git/**', '.github/**', '.gitignore', '.vscode/**',
         'gradle.properties', 'ghidart-OLD/**'
     // Exclude the local Ghidra distribution.
     exclude { it.relativePath.segments[0].matches('ghidra_[0-9].*') }

@@ -117,6 +117,18 @@ jobs:
           node --check .github/scripts/check-issue.cjs
       - name: Build extension
         run: '"$GRADLE_BINARY" --no-daemon buildExtension'
+      - name: Verify extension archive
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          from zipfile import ZipFile
+          archives = list(Path('dist').glob('*.zip'))
+          assert len(archives) == 1, archives
+          with ZipFile(archives[0]) as archive:
+              unwanted = {'.github', '.git', 'tests', 'samples', 'local'}
+              bad = [name for name in archive.namelist() if unwanted.intersection(Path(name).parts)]
+              assert not bad, bad
+          PYTHON
       - name: Retain build artifact
         uses: actions/upload-artifact@v7
         with:

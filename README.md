@@ -46,6 +46,27 @@ Install the ZIP from `dist/` through Ghidra's **File → Install Extensions**, t
 restart Ghidra. Alternatively, run `./gradlew --no-daemon installExtension` to
 install into the Ghidra directory above. Restart any running Ghidra after updating.
 
+## MCP (optional)
+
+[GhidraMCP](https://github.com/bethington/ghidra-mcp) can query the same native
+pseudocode as the GUI. ghidart does not require MCP. Specify the program when
+several are open, and use `variant="dart"` for decompiler queries.
+
+GhidraMCP 7.0.0's [ServiceUtils.decoderOf](https://github.com/bethington/ghidra-mcp/blob/v7.0.0/src/main/java/com/xebyte/core/ServiceUtils.java) uses an incorrect class path and an old
+API on Ghidra 12.2. If a query fails with `SleighLanguageDescription`, rebuild that
+MCP extension against the installed Ghidra with this API, then restart Ghidra:
+
+```java
+if (d instanceof ghidra.app.plugin.processors.sleigh.SleighLanguageDescription sld) {
+    var languageFile = sld.getLanguageFile();
+    var sla = languageFile == null ? null : languageFile.getSlaFile();
+    if (sla != null) return sla.getAbsolutePath();
+}
+```
+
+This is a fix to the external MCP extension, not a change to ghidart or the
+program's language. Keep the existing language-ID fallback in `decoderOf`.
+
 ## Usage
 
 1. For ELF, choose **Dart AOT ELF**. For Mach-O, use the official loader and select
@@ -360,6 +381,12 @@ The build references the installed official ARM64 sources through Ghidra's modul
 macro. A small SLEIGH wrapper exposes equivalent signed-word arithmetic; it keeps
 instruction encodings and register storage unchanged.
 See [B4A_INTERFACE.md](B4A_INTERFACE.md) for the b4a data format.
+
+Semantic regression runs headless with the native decompiler: it checks decoded
+boundaries, character references, pseudocode values/types and preservation of user
+edits. GUI checks cover menus, navigation and save/reopen behavior separately.
+Successful decompilation alone does not prove semantic correctness; retained
+references and visible pseudocode literals are measured separately.
 
 Samples and verification tools are local development materials, excluded from Git
 and extension packages. When `tests/VerifyB4a.java` is available locally,

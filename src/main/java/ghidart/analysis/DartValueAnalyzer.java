@@ -25,7 +25,6 @@ import ghidra.pcode.opbehavior.UnaryOpBehavior;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressOverflowException;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.LocalVariableImpl;
 import ghidra.program.model.listing.Program;

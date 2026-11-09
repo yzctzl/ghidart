@@ -7,7 +7,6 @@ import ghidart.datatype.DartSlotDataType;
 import ghidra.program.model.data.Undefined;
 import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Program;
-import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.Namespace;
 import ghidra.program.model.symbol.RefType;
 import ghidra.program.model.symbol.SourceType;

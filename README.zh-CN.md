@@ -42,6 +42,25 @@ export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.2_PUBLIC
 也可执行 `./gradlew --no-daemon installExtension`，安装到上述 Ghidra 目录。
 更新已打开的 Ghidra 时仍需重启。
 
+## MCP（可选）
+
+[GhidraMCP](https://github.com/bethington/ghidra-mcp) 可以查询与 GUI 相同的原生伪代码；
+ghidart 本身不依赖 MCP。打开多个程序时请明确指定程序，反编译查询使用 `variant="dart"`。
+
+GhidraMCP 7.0.0 的 [ServiceUtils.decoderOf](https://github.com/bethington/ghidra-mcp/blob/v7.0.0/src/main/java/com/xebyte/core/ServiceUtils.java) 在 Ghidra 12.2 中引用了错误的类路径和旧 API。
+若查询报错 `SleighLanguageDescription`，请改为以下 API，针对已安装的 Ghidra
+重新编译该 MCP 扩展，然后重启 Ghidra：
+
+```java
+if (d instanceof ghidra.app.plugin.processors.sleigh.SleighLanguageDescription sld) {
+    var languageFile = sld.getLanguageFile();
+    var sla = languageFile == null ? null : languageFile.getSlaFile();
+    if (sla != null) return sla.getAbsolutePath();
+}
+```
+
+修复对象是外部 MCP 扩展，不需要修改 ghidart 或程序语言；保留 `decoderOf` 原有的语言 ID 回退逻辑。
+
 ## 使用
 
 1. ELF 导入选择 **Dart AOT ELF**。Mach-O 使用官方加载器，选择语言
@@ -285,6 +304,10 @@ SDK 源码检查覆盖 30 个发布标签；真实二进制验证覆盖部分版
 构建通过 Ghidra 模块宏引用已安装的官方 ARM64 源码。小型 SLEIGH 包装仅规范化等价的
 有符号字运算，保留指令编码和寄存器存储，无需维护另一份指令集。
 b4a 数据格式见 [B4A_INTERFACE.md](B4A_INTERFACE.md)。
+
+语义回归主要使用 headless 原生反编译器，检查边界、字符引用、伪代码中的值／类型和用户修改保护。
+GUI 单独检查菜单、导航及保存重开。反编译成功本身不等于语义正确；
+引用保留与伪代码字面量可见性分别统计。
 
 样例和验证工具仅保留在本地，不进入 Git 或扩展包。本地存在 `tests/VerifyB4a.java` 时，
 可运行 `./gradlew --no-daemon verifySamples -PsamplesDir=/path/to/samples` 校验

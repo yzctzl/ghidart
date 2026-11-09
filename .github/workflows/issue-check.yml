@@ -29,4 +29,4 @@ jobs:
             const {data: issue} = await github.rest.issues.get({
               ...context.repo, issue_number: context.issue.number
             });
-            await check({github, context: {...context, payload: {...context.payload, issue}}});
+            await check({github, context: {repo: context.repo, payload: {...context.payload, issue}}});

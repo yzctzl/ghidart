@@ -63,14 +63,23 @@ jobs:
             const asset = assets[0];
             core.setOutput('tag', release.tag_name);
             core.setOutput('url', asset.browser_download_url);
+            core.setOutput('api_url', asset.url);
             core.setOutput('digest', asset.digest || '');
             core.notice(`Building against ${release.tag_name}: ${asset.name}`);
       - name: Download Ghidra
         env:
           GHIDRA_URL: ${{ steps.ghidra.outputs.url }}
           GHIDRA_DIGEST: ${{ steps.ghidra.outputs.digest }}
+          GHIDRA_API_URL: ${{ steps.ghidra.outputs.api_url }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          curl --fail --location --retry 3 "$GHIDRA_URL" -o "$RUNNER_TEMP/ghidra.zip"
+          if ! curl --fail --location --retry 3 --connect-timeout 30 --max-time 600 \
+            "$GHIDRA_URL" -o "$RUNNER_TEMP/ghidra.zip"; then
+            echo "Direct asset download failed; retrying through the official GitHub asset API."
+            curl --fail --location --retry 3 --connect-timeout 30 --max-time 600 \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/octet-stream" \
+              "$GHIDRA_API_URL" -o "$RUNNER_TEMP/ghidra.zip"
+          fi
           if [[ "$GHIDRA_DIGEST" == sha256:* ]]; then
             echo "${GHIDRA_DIGEST#sha256:}  $RUNNER_TEMP/ghidra.zip" | sha256sum --check
           fi

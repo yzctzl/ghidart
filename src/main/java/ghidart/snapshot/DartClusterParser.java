@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -477,6 +478,8 @@ public final class DartClusterParser {
     public final RootData roots;
     public final int totalAllocatedRefs;
     public final List<String> diagnostics;
+    /** Fully read objects whose optional semantic role is not understood. */
+    public final Map<Integer, String> opaqueObjects;
     public final Map<Integer, List<InstanceSlot>> instanceSlots;
     public final Set<Integer> immutableInstances;
     public final List<FunctionInfo> functionInfos;
@@ -581,10 +584,29 @@ public final class DartClusterParser {
       this.fillEndOffset = fillEndOffset;
       this.roots = roots;
       this.totalAllocatedRefs = totalAllocatedRefs;
-      this.diagnostics = Collections.unmodifiableList(diagnostics);
       this.instanceSlots = Map.copyOf(instanceSlots);
       this.immutableInstances = Set.copyOf(immutableInstances);
-      this.functionInfos = List.copyOf(functionInfos);
+      // Interpret only after the complete stream and identity table have validated.
+      // A new Function kind does not change its already-known wire fields.
+      var interpreted = new ArrayList<>(functionInfos);
+      var opaque = new LinkedHashMap<Integer, String>();
+      var knownRoles = new HashSet<Integer>();
+      for (var info : functionInfos) knownRoles.add(info.refId());
+      for (var named : namedObjects) {
+        if (named.cid != profile.cids.function || knownRoles.contains(named.refId)) continue;
+        var object = objectMap.get(named.refId);
+        if (object == null || object.scalars().length == 0) continue;
+        try {
+          interpreted.add(interpretFunction(named, object, profile));
+        } catch (IOException e) {
+          opaque.put(named.refId, e.getMessage());
+        }
+      }
+      this.functionInfos = List.copyOf(interpreted);
+      this.opaqueObjects = Map.copyOf(opaque);
+      var messages = new ArrayList<>(diagnostics);
+      opaque.forEach((ref, reason) -> messages.add("Function ref " + ref + ": " + reason));
+      this.diagnostics = List.copyOf(messages);
 
       Map<Integer, String> sMap = new HashMap<>(strings.size() * 2);
       for (ParsedString ps : strings) {
@@ -1225,7 +1247,6 @@ public final class DartClusterParser {
     List<FieldInfo> fields = new ArrayList<>();
     List<CodeEntry> codes = new ArrayList<>();
     List<PoolEntry> poolEntries = new ArrayList<>();
-    List<FunctionInfo> functionInfos = new ArrayList<>();
     Map<Integer, List<InstanceSlot>> instanceSlots = new HashMap<>();
     Set<Integer> immutableInstances = new HashSet<>();
     Map<Integer, List<Integer>> exceptionEntries = new HashMap<>();
@@ -1263,7 +1284,6 @@ public final class DartClusterParser {
               fields,
               codes,
               poolEntries,
-              functionInfos,
               instanceSlots,
               immutableInstances,
               exceptionEntries,
@@ -1313,7 +1333,7 @@ public final class DartClusterParser {
         vmResult,
         instanceSlots,
         immutableInstances,
-        functionInfos);
+        List.of());
   }
 
   /**
@@ -2215,7 +2235,6 @@ public final class DartClusterParser {
       List<FieldInfo> fields,
       List<CodeEntry> codes,
       List<PoolEntry> poolEntries,
-      List<FunctionInfo> functionInfos,
       Map<Integer, List<InstanceSlot>> instanceSlots,
       Set<Integer> immutableInstances,
       Map<Integer, List<Integer>> exceptionEntries,
@@ -2258,7 +2277,7 @@ public final class DartClusterParser {
         }
         break;
       case REFS:
-        readFillRefs(s, cm, spec, u, profile, namedObjects, funcTypes, types, fields, functionInfos, objects);
+        readFillRefs(s, cm, spec, u, profile, namedObjects, funcTypes, types, fields, objects);
         break;
       case DOUBLE:
         for (long i = 0; i < cm.count; i++) {
@@ -2585,12 +2604,12 @@ public final class DartClusterParser {
       List<FuncTypeInfo> funcTypesOut,
       List<TypeInfo> typesOut,
       List<FieldInfo> fieldsOut,
-      List<FunctionInfo> functionInfosOut,
       List<ObjectData> objects)
       throws IOException {
     boolean isTypeCluster = (cm.cid == profile.cids.type);
     int ref = cm.startRef;
     for (int i = 0; i < cm.count; i++) {
+      int objectStart = s.position();
       int canonical = spec.leadingBool ? s.readUint8() : -1;
       int nameRef = -1;
       int ownerRef = -1;
@@ -2659,33 +2678,40 @@ public final class DartClusterParser {
         rawScalars[0] = canonical;
         System.arraycopy(capturedScalars, 0, rawScalars, 1, capturedScalars.length);
       }
-      objects.add(new ObjectData(ref, cm.cid, capturedRefs, rawScalars, -1, 0));
+      // Retain the exact serialized Function span even if its role is unknown.
+      boolean function = cm.cid == profile.cids.function;
+      objects.add(new ObjectData(ref, cm.cid, capturedRefs, rawScalars,
+          function ? objectStart : -1, function ? s.position() - objectStart : 0));
       if (isTypeCluster) {
         typesOut.add(new TypeInfo(ref, cm.cid, capturedRefs, capturedScalars));
       }
       if (spec.nameIdx >= 0) {
         namedOut.add(new NamedObject(cm.cid, ref, nameRef, ownerRef, sigRef));
       }
-      if (cm.cid == profile.cids.function && capturedScalars.length > 0) {
-        long kindTag = capturedScalars[capturedScalars.length - 1];
-        var layout = functionLayout(profile);
-        int kind = (int) (kindTag & 0x1f);
-        var kinds = FunctionLayouts.ALL.getAsJsonObject("groups").getAsJsonArray(
-            layout.get("functionKinds").getAsString());
-        if (kind >= kinds.size()) throw new IOException("unknown Function kind: " + kind);
-        String role = kinds.get(kind).getAsString();
-        boolean isStatic = ((kindTag >>> layout.get("functionStaticBit").getAsInt()) & 1) != 0;
-        boolean hasThis = !isStatic && switch (role) {
-          case "RegularFunction", "GetterFunction", "SetterFunction", "Constructor",
-              "ImplicitGetter", "ImplicitSetter", "FieldInitializer", "MethodExtractor",
-              "NoSuchMethodDispatcher", "InvokeFieldDispatcher", "DynamicInvocationForwarder",
-              "RecordFieldGetter" -> true;
-          default -> false;
-        };
-        functionInfosOut.add(new FunctionInfo(ref, nameRef, ownerRef, sigRef, kind, isStatic, hasThis, role));
-      }
       ref++;
     }
+  }
+
+  /** Optional semantic decoding; unknown roles retain the structural object unchanged. */
+  private static FunctionInfo interpretFunction(NamedObject named, ObjectData object,
+      DartVersionProfile profile) throws IOException {
+    long kindTag = object.scalars()[object.scalars().length - 1];
+    var layout = functionLayout(profile);
+    int kind = (int) (kindTag & 0x1f);
+    var kinds = FunctionLayouts.ALL.getAsJsonObject("groups").getAsJsonArray(
+        layout.get("functionKinds").getAsString());
+    if (kind >= kinds.size()) throw new IOException("unknown Function kind: " + kind);
+    String role = kinds.get(kind).getAsString();
+    boolean isStatic = ((kindTag >>> layout.get("functionStaticBit").getAsInt()) & 1) != 0;
+    boolean hasThis = !isStatic && switch (role) {
+      case "RegularFunction", "GetterFunction", "SetterFunction", "Constructor",
+          "ImplicitGetter", "ImplicitSetter", "FieldInitializer", "MethodExtractor",
+          "NoSuchMethodDispatcher", "InvokeFieldDispatcher", "DynamicInvocationForwarder",
+          "RecordFieldGetter" -> true;
+      default -> false;
+    };
+    return new FunctionInfo(named.refId, named.nameRefId, named.ownerRefId,
+        named.signatureRefId, kind, isStatic, hasThis, role);
   }
 
   private static final class FunctionLayouts {

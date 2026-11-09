@@ -59,6 +59,9 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       DartClusterParser.Result objects, DartInstructionsTable table,
       List<DartCodeIndex.CodeUnit> units, boolean vmReferences, String identity) {}
 
+  /** Only complete, unambiguous scopes may survive another scope's rejection. */
+  private record Recovery(List<Snapshot> snapshots, String failure) {}
+
   public DartSnapshotAnalyzer() {
     super("Dart AOT Objects", "Read validated AOT boundaries, objects, pools and strings (L2).",
         AnalyzerType.BYTE_ANALYZER);
@@ -92,8 +95,10 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       throws CancelledException {
     try (var output = new DartAnalysisLog(program, log)) {
       try {
-        List<Snapshot> snapshots = DartLoadingUnits.isUnit(program, parentFile)
-            ? DartLoadingUnits.read(program, parentFile, monitor) : read(program, monitor);
+        Recovery recovery = DartLoadingUnits.isUnit(program, parentFile)
+            ? new Recovery(DartLoadingUnits.read(program, parentFile, monitor), "")
+            : readForPublication(program, monitor);
+        List<Snapshot> snapshots = recovery.snapshots();
         if (snapshots.isEmpty()) {
           recoverL1(program, "UNAVAILABLE", "No mapped AOT snapshot symbols", monitor, output.messages());
           return true;
@@ -107,12 +112,25 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
           ghidart.listing.DartNamespaces.migrate(program, monitor);
           for (Snapshot snapshot : snapshots) publish(program, snapshot, monitor, output.messages());
           DartAotAnalyzer.shortenEntryLabels(program, monitor);
-          ghidart.listing.DartSlotViews.upgradeAnchors(program, monitor);
+          boolean slotDisplay = enhance(program, OWNER + ".slotDisplay", 1, "slot display", () -> {
+            ghidart.listing.DartSlotViews.upgradeAnchors(program, monitor);
+          }, output.messages());
           ghidart.importer.B4aImporter.restoreModelReferences(program, monitor);
           monitor.checkCancelled();
+          boolean partial = !recovery.failure().isEmpty() || !slotDisplay
+              || snapshots.stream().anyMatch(snapshot -> program.getOptions(OWNER)
+                  .getBoolean(OWNER + "." + snapshot.scope() + ".partial", false));
+          var options = program.getOptions(OWNER);
+          options.setString("L2.status", partial ? "PARTIAL" : "PUBLISHED");
+          if (recovery.failure().isEmpty()) {
+            options.removeOption("L2.recovery.error");
+          } else {
+            options.setString("L2.recovery.error", recovery.failure());
+            logRecovery(program, snapshots, recovery.failure(), monitor, output.messages());
+          }
           graph.flush();
+          monitor.checkCancelled();
           commit = true;
-          program.getOptions(OWNER).setString("L2.status", "PUBLISHED");
         } finally {
           program.endTransaction(transaction, commit);
         }
@@ -181,6 +199,68 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       }
     }
     return range;
+  }
+
+  /** An isolate uses the VM reference table, but a VM snapshot is self-contained.
+   * Retry only that independently framed scope after full-input rejection. Every
+   * candidate must finish its objects, roots and instruction validation; a hash
+   * never authorizes publishing a prefix or choosing between conflicting facts.
+   * Loading units deliberately keep their existing parent validation path.
+   */
+  private static Recovery readForPublication(Program program, TaskMonitor monitor)
+      throws IOException, MemoryAccessException, CancelledException {
+    try {
+      return new Recovery(read(program, monitor), "");
+    } catch (IOException rejected) {
+      Address data = symbol(program, "kDartVmSnapshotData");
+      if (data == null) throw rejected; // Merged snapshots have no independent prefix.
+      var envelope = DartSnapshotHeader.inspect(clusteredBytes(program, data), 0, true);
+      Snapshot selected = null;
+      String meaning = null;
+      for (var profile : DartVersionProfile.candidates(envelope)) {
+        monitor.checkCancelled();
+        Snapshot candidate;
+        try {
+          candidate = read(program, "vm", data, symbol(program, "kDartVmSnapshotInstructions"),
+              null, true, profile, monitor);
+        } catch (IOException | IllegalArgumentException | MemoryAccessException e) {
+          continue;
+        }
+        String facts = interpretation(List.of(candidate));
+        if (selected != null && !meaning.equals(facts)) {
+          throw new IOException("ambiguous independent VM layouts; " + rejected.getMessage(), rejected);
+        }
+        if (selected == null) {
+          selected = candidate;
+          meaning = facts;
+        }
+      }
+      if (selected == null) throw rejected;
+      return new Recovery(List.of(selected), rejected.getMessage());
+    }
+  }
+
+  /** L1 may cover the rejected scope, never replace the retained L2 scope. */
+  private static void logRecovery(Program program, List<Snapshot> retained, String reason,
+      TaskMonitor monitor, MessageLog log)
+      throws CancelledException {
+    log.appendMsg("Dart AOT Objects", "L2 partial: independent VM facts retained; " + reason);
+    if (program.getMemory().getBlock("DartObjects_isolate") != null
+        && program.getOptions(OWNER).contains(OWNER + ".isolate")) {
+      log.appendMsg("Dart AOT Objects",
+          "Existing isolate generation preserved; automatic L1 recovery was not run.");
+      return;
+    }
+    var remaining = findManagedExecutableRange(program);
+    for (var snapshot : retained) {
+      long end = snapshot.table().uniqueRanges.stream()
+          .mapToLong(range -> range.pcOffset + range.size).max().orElse(0);
+      if (end > 0) remaining.delete(snapshot.instructions(), snapshot.instructions().add(end - 1));
+    }
+    if (!remaining.isEmpty()) {
+      log.appendMsg("Dart AOT Objects", "Running bounded L1 only in the unpublished instruction image.");
+      DartFunctionAnalyzer.recover(program, new AddressSet(), remaining, true, monitor, log);
+    }
   }
 
   static List<Snapshot> read(Program program, TaskMonitor monitor)
@@ -523,9 +603,7 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     } catch (ghidra.program.model.util.CodeUnitInsertionException e) {
       throw new IOException("object identity table collision", e);
     }
-    prepareSnapshotData(program, snapshot, monitor);
-    int defined = 0;
-    monitor.initialize(objects.strings.size(), "Defining Dart string payloads");
+    monitor.initialize(objects.strings.size(), "Publishing Dart string identities");
     for (var string : objects.strings) {
       monitor.checkCancelled();
       Address object = anchor.add((long) string.refId * 8);
@@ -533,8 +611,6 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       facts.add(object, JSON.toJson(Map.of("kind", "String", "payload", payload.toString(),
           "length", string.value.length(), "encoding", string.isOneByte ? "latin1" : "utf16le")));
       reference(program, object, payload);
-      int byteLength = Math.multiplyExact(string.value.length(), string.isOneByte ? 1 : 2);
-      if (byteLength > 0 && defineString(program, payload, byteLength, string.isOneByte)) defined++;
       monitor.increment();
     }
     for (var cls : objects.classes) {
@@ -736,13 +812,15 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + snapshot.units().size()
         + " payloads (" + objects.codes.stream().filter(code -> code.clusterIndex >= 0).count()
         + " serialized Code objects), " + stats.functionsCreated() + " new functions, " + stats.entryLabelsCreated()
-        + " entry labels, " + named + " function names, " + defined + "/" + objects.strings.size() + " string data, "
+        + " entry labels, " + named + " function names, " + objects.strings.size() + " string identities, "
         + objects.imagePoolEntries().size() + " scoped pool slots, " + objects.objects.size()
         + " retained object records; " + rootSlots + " root/dispatch slots."
-        + (roots == null ? " Root layout is not yet adapted." : " Root stream fully consumed."));
+        + (roots == null ? " Root layout is not yet adapted." : " Root stream fully consumed.")
+        + (objects.opaqueObjects.isEmpty() ? "" : " " + objects.opaqueObjects.size()
+            + " objects retained without role interpretation (raw fields/bytes preserved)."));
   }
 
-  /** Presentation can be added to an existing, byte-identical L2 generation. */
+  /** Independent, retryable enrichments of a fully validated structural generation. */
   private static void enrich(Program program, Snapshot snapshot, TaskMonitor monitor, MessageLog log)
       throws IOException, CancelledException {
     String option = OWNER + "." + snapshot.scope() + ".presentation";
@@ -751,32 +829,61 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       monitor.checkCancelled();
       ghidart.importer.B4aImporter.annotateClass(program, anchor.add(cls.refId * 8L), cls.classId);
     }
+    boolean complete = snapshot.objects().opaqueObjects.isEmpty();
+    complete &= enhance(program, OWNER + "." + snapshot.scope() + ".stringData", 1,
+        "string data", () -> {
+          prepareSnapshotData(program, snapshot, monitor);
+          int defined = 0;
+          int conflicts = 0;
+          Address firstConflict = null;
+          monitor.initialize(snapshot.objects().strings.size(), "Defining Dart string payloads");
+          for (var string : snapshot.objects().strings) {
+            monitor.checkCancelled();
+            Address payload = snapshot.data().add(string.dataOffset);
+            int length = Math.multiplyExact(string.value.length(), string.isOneByte ? 1 : 2);
+            if (length > 0) {
+              boolean created;
+              try {
+                created = defineString(program, payload, length, string.isOneByte);
+              } catch (IOException e) {
+                created = false;
+              }
+              if (created) {
+                defined++;
+              } else {
+                if (firstConflict == null) firstConflict = payload;
+                conflicts++;
+              }
+            }
+            monitor.increment();
+          }
+          log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + defined
+              + " string data definitions; " + conflicts + " conflicts (existing data preserved).");
+          if (conflicts > 0) {
+            throw new IOException(conflicts + " string data conflicts; first at " + firstConflict);
+          }
+        }, log);
     String semantics = OWNER + "." + snapshot.scope() + ".semanticFacts";
-    if (program.getOptions(OWNER).getInt(semantics, 0) != 1) {
+    complete &= enhance(program, semantics, 2, "semantic facts", () -> {
       publishSemanticFacts(program, snapshot, anchor, monitor);
-      program.getOptions(OWNER).setInt(semantics, 1);
-    }
-    if (program.getOptions(OWNER).getInt(option, 0) != 10) {
+    }, log);
+    complete &= enhance(program, option, 10, "symbol hierarchy", () -> {
       DartSnapshotSymbols.publish(program, snapshot, anchor, monitor, log);
-      program.getOptions(OWNER).setInt(option, 10);
-    }
+    }, log);
     String typeOption = OWNER + "." + snapshot.scope() + ".classTypes";
-    if (program.getOptions(OWNER).getInt(typeOption, 0) != 5) {
+    complete &= enhance(program, typeOption, 5, "class types", () -> {
       DartSnapshotTypes.publish(program, snapshot, monitor, log);
-      program.getOptions(OWNER).setInt(typeOption, 5);
-    }
+    }, log);
     String codeOption = OWNER + "." + snapshot.scope() + ".functionCodes";
-    if (program.getOptions(OWNER).getInt(codeOption, 0) != 1) {
+    complete &= enhance(program, codeOption, 1, "Function/Code relationships", () -> {
       publishFunctionCodes(program, snapshot, anchor, monitor);
-      program.getOptions(OWNER).setInt(codeOption, 1);
-    }
+    }, log);
     String views = OWNER + "." + snapshot.scope() + ".slotViews";
-    if (program.getOptions(OWNER).getInt(views, 0) != 2) {
+    complete &= enhance(program, views, 2, "PP views", () -> {
       ghidart.listing.DartSlotViews.publishPools(program, snapshot, anchor, monitor);
-      program.getOptions(OWNER).setInt(views, 2);
-    }
+    }, log);
     String threadOption = OWNER + "." + snapshot.scope() + ".threadReferences";
-    if (program.getOptions(OWNER).getInt(threadOption, 0) != 1) {
+    complete &= enhance(program, threadOption, 1, "THR references", () -> {
       var ranges = new AddressSet();
       for (var payload : snapshot.table().uniqueRanges) {
         Address start = snapshot.instructions().add(payload.pcOffset);
@@ -784,13 +891,39 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
       }
       int links = ghidart.listing.DartSlotViews.publishThreadAccesses(program, ranges, monitor);
       log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + links + " observed THR accesses (no layout required).");
-      program.getOptions(OWNER).setInt(threadOption, 1);
-    }
+    }, log);
     String poolOption = OWNER + "." + snapshot.scope() + ".poolReferences";
-    if (program.getOptions(OWNER).getInt(poolOption, 0) != 5) {
+    complete &= enhance(program, poolOption, 5, "PP references", () -> {
       int links = DartPoolReferences.publish(program, snapshot, anchor, monitor);
       log.appendMsg("Dart AOT Objects", snapshot.scope() + ": " + links + " PP slot references.");
-      program.getOptions(OWNER).setInt(poolOption, 5);
+    }, log);
+    program.getOptions(OWNER).setBoolean(OWNER + "." + snapshot.scope() + ".partial", !complete);
+  }
+
+  @FunctionalInterface
+  private interface Enhancement {
+    void publish() throws IOException, CancelledException;
+  }
+
+  /** Expected presentation conflicts must not discard unrelated, valid facts.
+   * Publishers add evidence incrementally and preserve user edits. Failed steps may
+   * retain valid additions, but never receive a completion stamp; reruns retry them.
+   * Cancellation and unexpected programming failures still abort the transaction.
+   */
+  private static boolean enhance(Program program, String key, int version, String label,
+      Enhancement action, MessageLog log) throws CancelledException {
+    var options = program.getOptions(OWNER);
+    if (options.getInt(key, 0) == version) return true;
+    try {
+      action.publish();
+      options.setInt(key, version);
+      options.removeOption(key + ".error");
+      return true;
+    } catch (IOException e) {
+      options.setString(key + ".error", e.getMessage());
+      log.appendMsg("Dart AOT Objects", label + " incomplete: " + e.getMessage()
+          + "; validated facts retained; this step will retry on reanalysis.");
+      return false;
     }
   }
 
@@ -807,6 +940,11 @@ public final class DartSnapshotAnalyzer extends AbstractAnalyzer {
     var fields = new java.util.HashSet<Integer>();
     for (var scope = snapshot.objects(); scope != null;
         scope = snapshot.objects().header.isLoadingUnit ? scope.vm : null) {
+      for (var opaque : scope.opaqueObjects.entrySet()) {
+        monitor.checkCancelled();
+        detail(facts, anchor.add(opaque.getKey() * 8L), "interpretation",
+            Map.of("status", "opaque", "capability", "Function role", "reason", opaque.getValue()));
+      }
       for (var function : scope.functionInfos) {
         monitor.checkCancelled();
         if (functions.add(function.refId())) {
